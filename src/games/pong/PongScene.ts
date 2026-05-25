@@ -1,17 +1,24 @@
 import Phaser from "phaser";
 
-/** The public surface of the Frame-generated PongGame machine (the "brain"). */
+/**
+ * The public surface of the Frame-generated Pong machine (the "brain").
+ * Mirrors the canonical Godot reference (ch01-pong/frame/pong.fgd): same
+ * events and per-state queries.
+ */
 export interface PongMachine {
   start(): void;
-  serve(): void;
-  point_scored(scorer: string): void;
+  restart(): void;
+  launch(): void;
   pause(): void;
   resume(): void;
-  restart(): void;
-  current_state(): string;
-  left_score(): number;
-  right_score(): number;
-  win_score(): number;
+  ball_out_left(): void;
+  ball_out_right(): void;
+  get_state(): string;
+  get_score_left(): number;
+  get_score_right(): number;
+  get_serve_direction(): number;
+  get_winner(): string;
+  is_playing(): boolean;
 }
 
 export const GAME_W = 720;
@@ -24,8 +31,8 @@ const BALL_SPEED = 340;
 
 /**
  * Phaser is the "body": rendering, input, and per-frame physics. It never
- * decides game *flow* — it reads `current_state()` to know what to do and fires
- * interface events (`serve`, `point_scored`, …) into the Frame machine when
+ * decides game *flow* — it reads `get_state()` to know what to do and fires
+ * interface events (`launch`, `ball_out_left`, …) into the Frame machine when
  * play demands a flow change. The machine owns every state transition.
  */
 export class PongScene extends Phaser.Scene {
@@ -67,17 +74,17 @@ export class PongScene extends Phaser.Scene {
   }
 
   private onAction(): void {
-    switch (this.m.current_state()) {
-      case "Attract": this.m.start(); break;
-      case "Serve": this.m.serve(); this.launch(); break;
-      case "GameOver": this.m.restart(); break;
+    switch (this.m.get_state()) {
+      case "attract": this.m.start(); break;
+      case "serving": this.m.launch(); this.launch(); break;
+      case "game_over": this.m.restart(); break;
     }
   }
 
   private onPause(): void {
-    const s = this.m.current_state();
-    if (s === "Serve" || s === "Rally") this.m.pause();
-    else if (s === "Paused") this.m.resume();
+    const s = this.m.get_state();
+    if (s === "serving" || s === "in_play") this.m.pause();
+    else if (s === "paused") this.m.resume();
   }
 
   private centerBall(): void {
@@ -86,8 +93,10 @@ export class PongScene extends Phaser.Scene {
     this.bvy = 0;
   }
 
+  // Serve in the machine-chosen direction (classic Pong: toward the
+  // player who just lost the point). serving_to is +1 right / -1 left.
   private launch(): void {
-    const dir = Math.random() < 0.5 ? -1 : 1;
+    const dir = this.m.get_serve_direction() >= 0 ? 1 : -1;
     const angle = Phaser.Math.FloatBetween(-0.35, 0.35);
     this.bvx = Math.cos(angle) * BALL_SPEED * dir;
     this.bvy = Math.sin(angle) * BALL_SPEED;
@@ -95,15 +104,15 @@ export class PongScene extends Phaser.Scene {
 
   update(_time: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
-    const s = this.m.current_state();
+    const s = this.m.get_state();
 
     // Re-center the ball when a new point begins or the game resets.
-    if ((s === "Serve" || s === "Attract") && this.prev !== s) this.centerBall();
+    if ((s === "serving" || s === "attract") && this.prev !== s) this.centerBall();
     this.prev = s;
 
-    if (s === "Rally") this.stepRally(dt);
+    if (s === "in_play") this.stepRally(dt);
 
-    this.scoreText.setText(`${this.m.left_score()} : ${this.m.right_score()}`);
+    this.scoreText.setText(`${this.m.get_score_left()} : ${this.m.get_score_right()}`);
     this.stateText.setText(`state: ${s}`);
     this.hintText.setText(this.hint(s));
   }
@@ -126,8 +135,10 @@ export class PongScene extends Phaser.Scene {
     this.bounce(this.left, 1);
     this.bounce(this.right, -1);
 
-    if (this.ball.x < -BALL) this.m.point_scored("right");
-    else if (this.ball.x > GAME_W + BALL) this.m.point_scored("left");
+    // Ball off the left edge => right player scored (ball_out_left);
+    // off the right edge => left player scored (ball_out_right).
+    if (this.ball.x < -BALL) this.m.ball_out_left();
+    else if (this.ball.x > GAME_W + BALL) this.m.ball_out_right();
   }
 
   private bounce(paddle: Phaser.GameObjects.Rectangle, dir: number): void {
@@ -147,12 +158,12 @@ export class PongScene extends Phaser.Scene {
 
   private hint(s: string): string {
     switch (s) {
-      case "Attract": return "SPACE to start";
-      case "Serve": return "SPACE to serve  ·  W/S move  ·  P pause";
-      case "Rally": return "W/S move  ·  P pause";
-      case "Paused": return "P to resume";
-      case "GameOver":
-        return `${this.m.left_score() >= this.m.win_score() ? "LEFT" : "RIGHT"} wins!  ·  SPACE to play again`;
+      case "attract": return "SPACE to start";
+      case "serving": return "SPACE to serve  ·  W/S move  ·  P pause";
+      case "in_play": return "W/S move  ·  P pause";
+      case "paused": return "P to resume";
+      case "game_over":
+        return `${this.m.get_winner().toUpperCase()} wins!  ·  SPACE to play again`;
       default: return "";
     }
   }
