@@ -5,7 +5,8 @@ import { invaders } from "./invaders";
 import { pacman } from "./pacman";
 import { platformer } from "./platformer";
 import { shooter } from "./shooter";
+import { stealth } from "./stealth";
 
-// The cabinet. Games are added here as they're ported from the Godot
-// frame-arcade mini-book (ch01 Pong … ch08 Stealth).
-export const GAMES: GameDef[] = [pong, breakout, invaders, pacman, platformer, shooter];
+// The cabinet. Ported from the Godot frame-arcade mini-book (ch01–ch08).
+// Asteroids (ch04, state-stack) is parked — see FRAMEC_BUGS.md (BUG-1).
+export const GAMES: GameDef[] = [pong, breakout, invaders, pacman, platformer, shooter, stealth];
