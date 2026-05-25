@@ -1,4 +1,4 @@
-import { BreakoutGame } from "./breakout.machine.js";
+import { Breakout } from "./breakout.machine.js";
 import dot from "./breakout.dot?raw";
 import { BreakoutScene } from "./BreakoutScene";
 import type { GameDef } from "../types";
@@ -9,6 +9,6 @@ export const breakout: GameDef = {
   teaches: "Orchestrator flow · lives & levels · clear/lose branching",
   controls: "A/D or ←/→ move · SPACE launch/next/replay · P pause",
   dot,
-  createMachine: () => BreakoutGame._create(),
+  createMachine: () => Breakout._create(),
   Scene: BreakoutScene,
 };

@@ -1,78 +1,281 @@
 @@[target("javascript")]
 
-// Breakout — game-flow state machine (JavaScript target: `this.`, host branching).
-// Frame owns flow + score/lives/brick count; Phaser owns paddle/ball/brick physics
-// and fires brick_hit / ball_lost as collisions happen.
-@@system BreakoutGame {
+// Breakout — three composed state machines.
+//
+// CANONICAL: mirrors the Godot reference
+// (frame-arcade/ch02-breakout/frame/breakout.fgd) exactly — same
+// three systems (Ball / BrickField / Breakout), states, events,
+// transitions, composition, and domain. Only the action-body host
+// code differs (JavaScript this./braces vs GDScript).
+//
+//   Ball        — modes of the ball (attached, in flight, lost);
+//                 velocity lives in $InFlight state variables.
+//   BrickField  — owns the brick list; one state.
+//   Breakout    — the top-level game; owns a Ball + BrickField and
+//                 routes collision events to them. The Phaser scene
+//                 talks only to Breakout (reads ball_vx/ball_vy,
+//                 reports wall/paddle/brick hits, ball_fell_off).
+
+@@system Ball {
+
+    interface:
+        launch(vx: float, vy: float)
+        lose()
+        attach()
+        bounce_x()
+        bounce_y()
+        set_velocity(vx: float, vy: float)
+        get_state(): string
+        get_vx(): float
+        get_vy(): float
+        is_flying(): bool
+
+    machine:
+        $AttachedToPaddle {
+            launch(vx: float, vy: float) { -> (vx, vy) $InFlight }
+
+            get_state(): string  { @@:("attached") }
+            get_vx(): float      { @@:(0.0) }
+            get_vy(): float      { @@:(0.0) }
+            is_flying(): bool    { @@:(false) }
+        }
+
+        $InFlight {
+            $.vx: float = 0.0
+            $.vy: float = 0.0
+
+            $>(vx: float, vy: float) {
+                $.vx = vx
+                $.vy = vy
+            }
+
+            bounce_x() { $.vx = -$.vx }
+            bounce_y() { $.vy = -$.vy }
+
+            set_velocity(vx: float, vy: float) {
+                $.vx = vx
+                $.vy = vy
+            }
+
+            lose() { -> $Lost }
+
+            get_state(): string  { @@:("in_flight") }
+            get_vx(): float      { @@:($.vx) }
+            get_vy(): float      { @@:($.vy) }
+            is_flying(): bool    { @@:(true) }
+        }
+
+        $Lost {
+            attach() { -> $AttachedToPaddle }
+
+            get_state(): string  { @@:("lost") }
+            get_vx(): float      { @@:(0.0) }
+            get_vy(): float      { @@:(0.0) }
+            is_flying(): bool    { @@:(false) }
+        }
+}
+
+@@system BrickField {
+
+    interface:
+        reset(count: int)
+        break_brick(index: int): bool
+        is_broken(index: int): bool
+        remaining(): int
+        is_cleared(): bool
+
+    machine:
+        $Active {
+            reset(count: int) {
+                this.bricks = []
+                let _i = 0
+                while (_i < count) {
+                    this.bricks.push(true)
+                    _i = _i + 1
+                }
+                this.remaining_count = count
+            }
+
+            break_brick(index: int): bool {
+                if (index < 0 || index >= this.bricks.length) {
+                    @@:return(false)
+                }
+                if (!this.bricks[index]) {
+                    @@:return(false)
+                }
+                this.bricks[index] = false
+                this.remaining_count = this.remaining_count - 1
+                @@:(true)
+            }
+
+            is_broken(index: int): bool {
+                if (index < 0 || index >= this.bricks.length) {
+                    @@:return(true)
+                }
+                @@:(!this.bricks[index])
+            }
+
+            remaining(): int  { @@:(this.remaining_count) }
+            is_cleared(): bool { @@:(this.remaining_count <= 0) }
+        }
+
+    domain:
+        bricks: list = []
+        remaining_count: int = 0
+}
+
+@@[main]
+@@system Breakout {
 
     operations:
         current_state(): string { @@:(@@:system.state) }
-        score(): int  { @@:(this.points) }
-        lives(): int  { @@:(this.balls) }
-        bricks(): int { @@:(this.remaining) }
 
     interface:
         start()
-        serve()
-        brick_hit()
-        ball_lost()
+        launch_ball(vx: float, vy: float)
+        brick_hit(index: int)
+        paddle_hit(vx: float, vy: float)
+        wall_bounce_x()
+        wall_bounce_y()
+        ball_fell_off()
         pause()
         resume()
         restart()
+        get_state(): string
+        get_score(): int
+        get_lives(): int
+        get_level(): int
+        bricks_remaining(): int
+        is_brick_broken(index: int): bool
+        ball_state(): string
+        ball_vx(): float
+        ball_vy(): float
 
     machine:
-        $Title {
-            start() { -> $Serve }
-        }
+        $Attract {
+            $>() {
+                this.score = 0
+                this.lives = 3
+                this.level = 1
+            }
 
-        $Serve {
-            serve() { -> $Playing }
-            pause() { push$ -> $Paused }
+            start() {
+                this.bricks.reset(this.brick_count)
+                this.ball.attach()
+                -> $Playing
+            }
+
+            get_state(): string          { @@:("attract") }
+            get_score(): int             { @@:(this.score) }
+            get_lives(): int             { @@:(this.lives) }
+            get_level(): int             { @@:(this.level) }
+            bricks_remaining(): int      { @@:(this.bricks.remaining()) }
+            is_brick_broken(index: int): bool { @@:(this.bricks.is_broken(index)) }
+            ball_state(): string         { @@:(this.ball.get_state()) }
+            ball_vx(): float             { @@:(this.ball.get_vx()) }
+            ball_vy(): float             { @@:(this.ball.get_vy()) }
         }
 
         $Playing {
-            brick_hit() {
-                this.points = this.points + 10
-                this.remaining = this.remaining - 1
-                if (this.remaining <= 0) {
-                    -> $Cleared
+            launch_ball(vx: float, vy: float) {
+                this.ball.launch(vx, vy)
+            }
+
+            brick_hit(index: int) {
+                if (this.bricks.break_brick(index)) {
+                    this.score = this.score + this.points_per_brick
+                    this.ball.bounce_y()
+                    if (this.bricks.is_cleared()) {
+                        -> $LevelClear
+                    }
                 }
             }
-            ball_lost() {
-                this.balls = this.balls - 1
-                if (this.balls <= 0) {
+
+            paddle_hit(vx: float, vy: float) {
+                this.ball.set_velocity(vx, vy)
+            }
+
+            wall_bounce_x() { this.ball.bounce_x() }
+            wall_bounce_y() { this.ball.bounce_y() }
+
+            ball_fell_off() {
+                this.lives = this.lives - 1
+                if (this.lives <= 0) {
                     -> $GameOver
+                } else {
+                    this.ball.attach()
                 }
-                -> $Serve
             }
+
             pause() { push$ -> $Paused }
+
+            get_state(): string          { @@:("playing") }
+            get_score(): int             { @@:(this.score) }
+            get_lives(): int             { @@:(this.lives) }
+            get_level(): int             { @@:(this.level) }
+            bricks_remaining(): int      { @@:(this.bricks.remaining()) }
+            is_brick_broken(index: int): bool { @@:(this.bricks.is_broken(index)) }
+            ball_state(): string         { @@:(this.ball.get_state()) }
+            ball_vx(): float             { @@:(this.ball.get_vx()) }
+            ball_vy(): float             { @@:(this.ball.get_vy()) }
         }
 
-        $Cleared {
-            // next level: refill bricks, serve again
-            serve() {
-                this.remaining = this.brickCount
+        $LevelClear {
+            $>() {
+                this.level = this.level + 1
+            }
+
+            start() {
+                this.bricks.reset(this.brick_count)
+                this.ball.attach()
                 -> $Playing
             }
-            pause() { push$ -> $Paused }
+
+            get_state(): string          { @@:("level_clear") }
+            get_score(): int             { @@:(this.score) }
+            get_lives(): int             { @@:(this.lives) }
+            get_level(): int             { @@:(this.level) }
+            bricks_remaining(): int      { @@:(this.bricks.remaining()) }
+            is_brick_broken(index: int): bool { @@:(this.bricks.is_broken(index)) }
+            ball_state(): string         { @@:(this.ball.get_state()) }
+            ball_vx(): float             { @@:(this.ball.get_vx()) }
+            ball_vy(): float             { @@:(this.ball.get_vy()) }
         }
 
         $Paused {
             resume() { -> pop$ }
+
+            get_state(): string          { @@:("paused") }
+            get_score(): int             { @@:(this.score) }
+            get_lives(): int             { @@:(this.lives) }
+            get_level(): int             { @@:(this.level) }
+            bricks_remaining(): int      { @@:(this.bricks.remaining()) }
+            is_brick_broken(index: int): bool { @@:(this.bricks.is_broken(index)) }
+            ball_state(): string         { @@:(this.ball.get_state()) }
+            ball_vx(): float             { @@:(this.ball.get_vx()) }
+            ball_vy(): float             { @@:(this.ball.get_vy()) }
         }
 
         $GameOver {
-            restart() {
-                this.points = 0
-                this.balls = 3
-                this.remaining = this.brickCount
-                -> $Title
-            }
+            restart() { -> $Attract }
+
+            get_state(): string          { @@:("game_over") }
+            get_score(): int             { @@:(this.score) }
+            get_lives(): int             { @@:(this.lives) }
+            get_level(): int             { @@:(this.level) }
+            bricks_remaining(): int      { @@:(this.bricks.remaining()) }
+            is_brick_broken(index: int): bool { @@:(this.bricks.is_broken(index)) }
+            ball_state(): string         { @@:(this.ball.get_state()) }
+            ball_vx(): float             { @@:(this.ball.get_vx()) }
+            ball_vy(): float             { @@:(this.ball.get_vy()) }
         }
 
     domain:
-        points: int = 0
-        balls: int = 3
-        brickCount: int = 40
-        remaining: int = 40
+        score: int = 0
+        lives: int = 3
+        level: int = 1
+        brick_count: int = 40
+        points_per_brick: int = 10
+        ball = @@Ball()
+        bricks = @@BrickField()
 }

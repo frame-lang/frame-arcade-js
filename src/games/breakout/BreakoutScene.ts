@@ -1,17 +1,34 @@
 import Phaser from "phaser";
 
+/**
+ * The public surface of the canonical Breakout machine (mirrors the Godot
+ * reference, ch02-breakout). The machine owns ball velocity (the Ball
+ * sub-system) and the brick field (the BrickField sub-system); this scene is
+ * a thin driver — it reads ball_vx/ball_vy each frame, integrates position,
+ * and reports collisions back (wall_bounce_x/y, paddle_hit, brick_hit,
+ * ball_fell_off), exactly like the Godot main.gd.
+ */
 export interface BreakoutMachine {
   start(): void;
-  serve(): void;
-  brick_hit(): void;
-  ball_lost(): void;
+  launch_ball(vx: number, vy: number): void;
+  brick_hit(index: number): void;
+  paddle_hit(vx: number, vy: number): void;
+  wall_bounce_x(): void;
+  wall_bounce_y(): void;
+  ball_fell_off(): void;
   pause(): void;
   resume(): void;
   restart(): void;
   current_state(): string;
-  score(): number;
-  lives(): number;
-  bricks(): number;
+  get_state(): string;
+  get_score(): number;
+  get_lives(): number;
+  get_level(): number;
+  bricks_remaining(): number;
+  is_brick_broken(index: number): boolean;
+  ball_state(): string;
+  ball_vx(): number;
+  ball_vy(): number;
 }
 
 const W = 720;
@@ -22,19 +39,20 @@ const BALL = 10;
 const PADDLE_SPEED = 460;
 const BALL_SPEED = 320;
 const COLS = 10;
-const ROWS = 4;
+const ROWS = 4;        // COLS * ROWS = 40 = the machine's brick_count
+const PAD = 6;
+const BRICK_H = 18;
+const BRICK_TOP = 60;
 
 export class BreakoutScene extends Phaser.Scene {
   private m: BreakoutMachine;
   private paddle!: Phaser.GameObjects.Rectangle;
   private ball!: Phaser.GameObjects.Rectangle;
-  private bricks: Phaser.GameObjects.Rectangle[] = [];
+  private bricks: Phaser.GameObjects.Rectangle[] = [];   // index-aligned with the machine's brick list
   private scoreText!: Phaser.GameObjects.Text;
   private stateText!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
-  private bvx = 0;
-  private bvy = 0;
   private prev = "";
 
   constructor(machine: BreakoutMachine) {
@@ -53,66 +71,74 @@ export class BreakoutScene extends Phaser.Scene {
     this.keys = this.input.keyboard!.addKeys("A,D,LEFT,RIGHT") as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on("keydown-SPACE", () => this.onAction());
     this.input.keyboard!.on("keydown-P", () => this.onPause());
-    this.resetBall();
+    this.buildBricks();
+    this.parkBall();
   }
 
   private onAction(): void {
-    switch (this.m.current_state()) {
-      case "Title": this.m.start(); break;
-      case "Serve": this.m.serve(); this.launch(); break;
-      case "Cleared": this.m.serve(); break;
-      case "GameOver": this.m.restart(); break;
+    switch (this.m.get_state()) {
+      case "attract": this.m.start(); break;
+      // In $Playing the ball starts attached; SPACE launches it.
+      case "playing": if (this.m.ball_state() === "attached") this.m.launch_ball(this.launchVx(), -BALL_SPEED); break;
+      case "level_clear": this.m.start(); break;   // start() advances to the next level
+      case "game_over": this.m.restart(); break;
     }
   }
+
   private onPause(): void {
-    const s = this.m.current_state();
-    if (s === "Serve" || s === "Playing" || s === "Cleared") this.m.pause();
-    else if (s === "Paused") this.m.resume();
+    const s = this.m.get_state();
+    if (s === "playing") this.m.pause();
+    else if (s === "paused") this.m.resume();
   }
 
-  private resetBall(): void {
-    this.ball.setPosition(this.paddle.x, H - 40);
-    this.bvx = 0;
-    this.bvy = 0;
-  }
-  private launch(): void {
-    this.bvx = Phaser.Math.FloatBetween(-1, 1) * BALL_SPEED * 0.6;
-    this.bvy = -BALL_SPEED;
+  private launchVx(): number {
+    return Phaser.Math.FloatBetween(-1, 1) * BALL_SPEED * 0.6;
   }
 
-  private buildBricks(n: number): void {
+  // Build the full COLS×ROWS grid; visibility is driven each frame by the
+  // machine's is_brick_broken(i).
+  private buildBricks(): void {
     this.bricks.forEach((b) => b.destroy());
     this.bricks = [];
-    const pad = 6;
-    const bw = (W - pad * (COLS + 1)) / COLS;
-    const bh = 18;
+    const bw = (W - PAD * (COLS + 1)) / COLS;
     const colors = [0xf28b82, 0xfbbc04, 0x81c995, 0x8ab4f8];
-    let made = 0;
-    for (let r = 0; r < ROWS && made < n; r++) {
-      for (let c = 0; c < COLS && made < n; c++) {
-        const x = pad + c * (bw + pad) + bw / 2;
-        const y = 60 + r * (bh + pad) + bh / 2;
-        this.bricks.push(this.add.rectangle(x, y, bw, bh, colors[r % colors.length]));
-        made++;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const x = PAD + c * (bw + PAD) + bw / 2;
+        const y = BRICK_TOP + r * (BRICK_H + PAD) + BRICK_H / 2;
+        this.bricks.push(this.add.rectangle(x, y, bw, BRICK_H, colors[r % colors.length]));
       }
     }
   }
 
+  private parkBall(): void {
+    this.ball.setPosition(this.paddle.x, H - 40);
+  }
+
   update(_t: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
-    const s = this.m.current_state();
+    const s = this.m.get_state();
 
-    if (s === "Playing" && this.prev !== "Playing" && this.bricks.length < this.m.bricks()) {
-      this.buildBricks(this.m.bricks());
+    if ((s === "playing" || s === "level_clear") && this.prev !== s) {
+      // New round / next level: bricks were reset by the machine.
+      this.parkBall();
     }
-    if ((s === "Serve" || s === "Title") && this.prev !== s) this.resetBall();
     this.prev = s;
 
-    if (s === "Serve") this.ball.x = this.paddle.x; // ball rides the paddle pre-serve
-    if (s === "Serve" || s === "Playing") this.movePaddle(dt);
-    if (s === "Playing") this.stepBall(dt);
+    if (s === "playing") {
+      this.movePaddle(dt);
+      if (this.m.ball_state() === "attached") this.parkBall();
+      else if (this.m.ball_state() === "in_flight") this.stepBall(dt);
+    }
 
-    this.scoreText.setText(`score ${this.m.score()}   lives ${this.m.lives()}   bricks ${this.m.bricks()}`);
+    // Brick visibility reflects the machine's brick field.
+    for (let i = 0; i < this.bricks.length; i++) {
+      this.bricks[i].setVisible(!this.m.is_brick_broken(i));
+    }
+
+    this.scoreText.setText(
+      `score ${this.m.get_score()}   lives ${this.m.get_lives()}   level ${this.m.get_level()}   bricks ${this.m.bricks_remaining()}`,
+    );
     this.stateText.setText(`state: ${s}`);
     this.hintText.setText(this.hint(s));
   }
@@ -123,33 +149,31 @@ export class BreakoutScene extends Phaser.Scene {
     this.paddle.x = Phaser.Math.Clamp(this.paddle.x, PADDLE_W / 2, W - PADDLE_W / 2);
   }
 
+  // The machine owns velocity: read it, integrate, report collisions back
+  // (which mutate the machine's velocity), then let the next frame re-read.
   private stepBall(dt: number): void {
-    this.ball.x += this.bvx * dt;
-    this.ball.y += this.bvy * dt;
+    this.ball.x += this.m.ball_vx() * dt;
+    this.ball.y += this.m.ball_vy() * dt;
 
-    if (this.ball.x < BALL / 2) { this.ball.x = BALL / 2; this.bvx = Math.abs(this.bvx); }
-    if (this.ball.x > W - BALL / 2) { this.ball.x = W - BALL / 2; this.bvx = -Math.abs(this.bvx); }
-    if (this.ball.y < BALL / 2) { this.ball.y = BALL / 2; this.bvy = Math.abs(this.bvy); }
+    if (this.ball.x < BALL / 2) { this.ball.x = BALL / 2; if (this.m.ball_vx() < 0) this.m.wall_bounce_x(); }
+    if (this.ball.x > W - BALL / 2) { this.ball.x = W - BALL / 2; if (this.m.ball_vx() > 0) this.m.wall_bounce_x(); }
+    if (this.ball.y < BALL / 2) { this.ball.y = BALL / 2; if (this.m.ball_vy() < 0) this.m.wall_bounce_y(); }
 
-    // paddle
-    if (this.hit(this.paddle) && this.bvy > 0) {
-      this.bvy = -Math.abs(this.bvy);
-      this.bvx += ((this.ball.x - this.paddle.x) / (PADDLE_W / 2)) * 120;
+    // Paddle: reflect upward with english based on contact offset.
+    if (this.hit(this.paddle) && this.m.ball_vy() > 0) {
+      const vx = this.m.ball_vx() + ((this.ball.x - this.paddle.x) / (PADDLE_W / 2)) * 120;
+      this.m.paddle_hit(vx, -Math.abs(this.m.ball_vy()));
     }
 
-    // bricks
-    for (let i = this.bricks.length - 1; i >= 0; i--) {
-      if (this.hit(this.bricks[i])) {
-        const b = this.bricks[i];
-        this.bvy = this.ball.y < b.y ? -Math.abs(this.bvy) : Math.abs(this.bvy);
-        b.destroy();
-        this.bricks.splice(i, 1);
-        this.m.brick_hit();
+    // Bricks: report the first hit; the machine breaks it + bounces + scores.
+    for (let i = 0; i < this.bricks.length; i++) {
+      if (!this.m.is_brick_broken(i) && this.hit(this.bricks[i])) {
+        this.m.brick_hit(i);
         break;
       }
     }
 
-    if (this.ball.y > H + BALL) this.m.ball_lost();
+    if (this.ball.y > H + BALL) this.m.ball_fell_off();
   }
 
   private hit(o: Phaser.GameObjects.Rectangle): boolean {
@@ -161,12 +185,11 @@ export class BreakoutScene extends Phaser.Scene {
 
   private hint(s: string): string {
     switch (s) {
-      case "Title": return "SPACE to start";
-      case "Serve": return "SPACE to launch  ·  A/D move";
-      case "Playing": return "";
-      case "Cleared": return "Level cleared!  ·  SPACE for next";
-      case "Paused": return "P to resume";
-      case "GameOver": return "Game over  ·  SPACE to restart";
+      case "attract": return "SPACE to start";
+      case "playing": return this.m.ball_state() === "attached" ? "SPACE to launch  ·  A/D move  ·  P pause" : "A/D move  ·  P pause";
+      case "level_clear": return "Level cleared!  ·  SPACE for next";
+      case "paused": return "P to resume";
+      case "game_over": return "Game over  ·  SPACE to restart";
       default: return "";
     }
   }
