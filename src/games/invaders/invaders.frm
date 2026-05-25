@@ -1,84 +1,462 @@
 @@[target("javascript")]
 
-// Space Invaders — hierarchical state machine.
-// $Marching and $Diving are children of $Wave; they inherit $Wave's shared
-// handlers (invader_killed, reached_bottom, pause) via the trailing `=> $^`.
-@@system InvadersGame {
+// Space Invaders — three composed state machines.
+//
+// CANONICAL: mirrors the Godot reference
+// (frame-arcade/ch03-invaders/frame/invaders.fgd) exactly — same
+// three systems (Player / Fleet / Invaders), states, events,
+// transitions, the $InGame HSM parent, push$/pop$ pause, owned
+// sub-systems, and domain. Only action bodies differ (JS).
+//
+//   Player    — alive / exploding / invulnerable / dead
+//   Fleet     — marching / stepping / defeated; speeds up as
+//               invaders die (step_interval recompute)
+//   Invaders  — top-level HSM; $Playing/$PlayerDying/$WaveComplete
+//               share pause/query via the $InGame parent.
+
+@@system Player {
+
+    interface:
+        tick(dt: float)
+        hit()
+        respawn()
+        can_fire(): bool
+        can_be_hit(): bool
+        is_alive(): bool
+        get_state(): string
+        get_lives(): int
+
+    machine:
+        $Alive {
+            hit() { -> $Exploding }
+
+            can_fire(): bool    { @@:(true) }
+            can_be_hit(): bool  { @@:(true) }
+            is_alive(): bool    { @@:(true) }
+            get_state(): string { @@:("alive") }
+            get_lives(): int    { @@:(this.lives_remaining) }
+        }
+
+        $Exploding {
+            $.timer: float = 0.0
+            $.duration: float = 1.2
+
+            tick(dt: float) {
+                $.timer = $.timer + dt
+                if ($.timer >= $.duration) {
+                    this.lives_remaining = this.lives_remaining - 1
+                    if (this.lives_remaining <= 0) {
+                        -> $Dead
+                    } else {
+                        -> $Invulnerable
+                    }
+                }
+            }
+
+            can_fire(): bool    { @@:(false) }
+            can_be_hit(): bool  { @@:(false) }
+            is_alive(): bool    { @@:(false) }
+            get_state(): string { @@:("exploding") }
+            get_lives(): int    { @@:(this.lives_remaining) }
+        }
+
+        $Invulnerable {
+            $.timer: float = 0.0
+            $.duration: float = 1.5
+
+            tick(dt: float) {
+                $.timer = $.timer + dt
+                if ($.timer >= $.duration) {
+                    -> $Alive
+                }
+            }
+
+            can_fire(): bool    { @@:(true) }
+            can_be_hit(): bool  { @@:(false) }
+            is_alive(): bool    { @@:(true) }
+            get_state(): string { @@:("invulnerable") }
+            get_lives(): int    { @@:(this.lives_remaining) }
+        }
+
+        $Dead {
+            respawn() {
+                this.lives_remaining = this.starting_lives
+                -> $Alive
+            }
+
+            can_fire(): bool    { @@:(false) }
+            can_be_hit(): bool  { @@:(false) }
+            is_alive(): bool    { @@:(false) }
+            get_state(): string { @@:("dead") }
+            get_lives(): int    { @@:(0) }
+        }
+
+    domain:
+        lives_remaining: int = 3
+        starting_lives: int = 3
+}
+
+@@system Fleet {
+
+    interface:
+        tick(dt: float)
+        kill_invader(index: int): bool
+        reset(rows: int, cols: int)
+        edge_reached()
+        consume_step(): bool
+        wants_to_step(): bool
+        get_state(): string
+        get_direction(): int
+        get_step_interval(): float
+        is_alive(index: int): bool
+        alive_count(): int
+        lowest_row(): int
+        cols(): int
+        rows(): int
+        total(): int
+
+    machine:
+        $Marching {
+            $.timer: float = 0.0
+
+            tick(dt: float) {
+                $.timer = $.timer + dt
+            }
+
+            reset(rows: int, cols: int) {
+                this._do_reset(rows, cols)
+                $.timer = 0.0
+            }
+
+            kill_invader(index: int): bool {
+                if (this._do_kill(index)) {
+                    if (this._count_alive() == 0) {
+                        -> $Defeated
+                        @@:return(true)
+                    }
+                    @@:return(true)
+                }
+                @@:(false)
+            }
+
+            edge_reached() {
+                this.pending_step = true
+                -> $Stepping
+            }
+
+            consume_step(): bool {
+                if ($.timer >= this.step_interval) {
+                    $.timer = 0.0
+                    @@:return(true)
+                }
+                @@:(false)
+            }
+
+            wants_to_step(): bool       { @@:($.timer >= this.step_interval) }
+            get_state(): string         { @@:("marching") }
+            get_direction(): int        { @@:(this.direction) }
+            get_step_interval(): float  { @@:(this.step_interval) }
+            is_alive(index: int): bool  { @@:(this._is_alive(index)) }
+            alive_count(): int          { @@:(this._count_alive()) }
+            lowest_row(): int           { @@:(this._lowest_row()) }
+            cols(): int                 { @@:(this.grid_cols) }
+            rows(): int                 { @@:(this.grid_rows) }
+            total(): int                { @@:(this.grid_rows * this.grid_cols) }
+        }
+
+        $Stepping {
+            $>() {
+                this.direction = -this.direction
+                this.pending_step = false
+            }
+
+            tick(dt: float) {
+                -> $Marching
+            }
+
+            kill_invader(index: int): bool {
+                if (this._do_kill(index)) {
+                    if (this._count_alive() == 0) {
+                        -> $Defeated
+                        @@:return(true)
+                    }
+                    @@:return(true)
+                }
+                @@:(false)
+            }
+
+            consume_step(): bool        { @@:(false) }
+            wants_to_step(): bool       { @@:(false) }
+            get_state(): string         { @@:("stepping") }
+            get_direction(): int        { @@:(this.direction) }
+            get_step_interval(): float  { @@:(this.step_interval) }
+            is_alive(index: int): bool  { @@:(this._is_alive(index)) }
+            alive_count(): int          { @@:(this._count_alive()) }
+            lowest_row(): int           { @@:(this._lowest_row()) }
+            cols(): int                 { @@:(this.grid_cols) }
+            rows(): int                 { @@:(this.grid_rows) }
+            total(): int                { @@:(this.grid_rows * this.grid_cols) }
+        }
+
+        $Defeated {
+            reset(rows: int, cols: int) {
+                this._do_reset(rows, cols)
+                -> $Marching
+            }
+
+            consume_step(): bool        { @@:(false) }
+            wants_to_step(): bool       { @@:(false) }
+            get_state(): string         { @@:("defeated") }
+            get_direction(): int        { @@:(this.direction) }
+            get_step_interval(): float  { @@:(this.step_interval) }
+            is_alive(index: int): bool  { @@:(false) }
+            alive_count(): int          { @@:(0) }
+            lowest_row(): int           { @@:(-1) }
+            cols(): int                 { @@:(this.grid_cols) }
+            rows(): int                 { @@:(this.grid_rows) }
+            total(): int                { @@:(this.grid_rows * this.grid_cols) }
+        }
+
+    actions:
+        _do_reset(rows: int, cols: int) {
+            this.grid_rows = rows
+            this.grid_cols = cols
+            this.alive = []
+            let total = rows * cols
+            let i = 0
+            while (i < total) {
+                this.alive.push(true)
+                i = i + 1
+            }
+            this.direction = 1
+            this.step_interval = this.initial_step_interval
+            this.total_invaders = total
+        }
+
+        _do_kill(index: int) {
+            if (index < 0 || index >= this.alive.length) {
+                return false
+            }
+            if (!this.alive[index]) {
+                return false
+            }
+            this.alive[index] = false
+            this._update_pace()
+            return true
+        }
+
+        _is_alive(index: int) {
+            if (index < 0 || index >= this.alive.length) {
+                return false
+            }
+            return this.alive[index]
+        }
+
+        _count_alive() {
+            let c = 0
+            let i = 0
+            while (i < this.alive.length) {
+                if (this.alive[i]) {
+                    c = c + 1
+                }
+                i = i + 1
+            }
+            return c
+        }
+
+        _lowest_row() {
+            let i = this.alive.length - 1
+            while (i >= 0) {
+                if (this.alive[i]) {
+                    return Math.floor(i / this.grid_cols)
+                }
+                i = i - 1
+            }
+            return -1
+        }
+
+        _update_pace() {
+            if (this.total_invaders <= 0) {
+                return
+            }
+            let live = this._count_alive()
+            let frac = live / this.total_invaders
+            this.step_interval = this.min_step_interval + (this.initial_step_interval - this.min_step_interval) * frac
+        }
+
+    domain:
+        alive: list = []
+        grid_rows: int = 5
+        grid_cols: int = 11
+        total_invaders: int = 55
+        direction: int = 1
+        step_interval: float = 0.6
+        initial_step_interval: float = 0.6
+        min_step_interval: float = 0.06
+        pending_step: bool = false
+}
+
+@@[main]
+@@system Invaders {
 
     operations:
         current_state(): string { @@:(@@:system.state) }
-        score(): int     { @@:(this.points) }
-        lives(): int     { @@:(this.ships) }
-        invaders(): int  { @@:(this.alive) }
 
     interface:
         start()
-        dive()
-        land()
-        invader_killed()
-        reached_bottom()
+        restart()
         pause()
         resume()
-        restart()
+        tick(dt: float)
+        player_killed_invader(index: int)
+        player_hit()
+        fleet_reached_edge()
+        fleet_reached_bottom()
+        get_state(): string
+        get_score(): int
+        get_lives(): int
+        get_wave(): int
+        is_paused(): bool
 
     machine:
-        $Title {
-            start() { -> $Marching }
+        $Attract {
+            $>() {
+                this.score = 0
+                this.wave = 1
+            }
+
+            start() {
+                this.player.respawn()
+                this.fleet.reset(this.fleet_rows, this.fleet_cols)
+                -> $Playing
+            }
+
+            get_state(): string { @@:("attract") }
+            get_score(): int    { @@:(this.score) }
+            get_lives(): int    { @@:(this.player.get_lives()) }
+            get_wave(): int     { @@:(this.wave) }
+            is_paused(): bool   { @@:(false) }
         }
 
-        // Parent: shared behavior for the whole wave.
-        $Wave {
-            invader_killed() {
-                this.points = this.points + 25
-                this.alive = this.alive - 1
-                if (this.alive <= 0) {
-                    -> $Victory
-                }
+        $InGame {
+            pause() {
+                push$ -> $Paused
             }
-            reached_bottom() {
-                this.ships = this.ships - 1
-                if (this.ships <= 0) {
-                    -> $GameOver
-                }
-            }
-            pause() { push$ -> $Paused }
+
+            get_state(): string { @@:("in_game") }
+            get_score(): int    { @@:(this.score) }
+            get_lives(): int    { @@:(this.player.get_lives()) }
+            get_wave(): int     { @@:(this.wave) }
+            is_paused(): bool   { @@:(false) }
         }
 
-        $Marching => $Wave {
-            dive() { -> $Diving }
+        $Playing => $InGame {
+            tick(dt: float) {
+                this.player.tick(dt)
+                this.fleet.tick(dt)
+            }
+
+            player_killed_invader(index: int) {
+                if (this.fleet.kill_invader(index)) {
+                    this.score = this.score + this.points_per_invader
+                    if (this.fleet.alive_count() <= 0) {
+                        -> $WaveComplete
+                    }
+                }
+            }
+
+            player_hit() {
+                if (this.player.can_be_hit()) {
+                    this.player.hit()
+                    -> $PlayerDying
+                }
+            }
+
+            fleet_reached_edge() {
+                this.fleet.edge_reached()
+            }
+
+            fleet_reached_bottom() {
+                -> $GameOver
+            }
+
+            get_state(): string { @@:("playing") }
             => $^
         }
 
-        $Diving => $Wave {
-            land() { -> $Marching }
+        $PlayerDying => $InGame {
+            tick(dt: float) {
+                this.player.tick(dt)
+                this.fleet.tick(dt)
+                if (this.player.get_state() == "invulnerable") {
+                    -> $Playing
+                } else if (this.player.get_state() == "dead") {
+                    -> $GameOver
+                }
+            }
+
+            fleet_reached_edge() {
+                this.fleet.edge_reached()
+            }
+
+            fleet_reached_bottom() {
+                -> $GameOver
+            }
+
+            get_state(): string { @@:("player_dying") }
+            => $^
+        }
+
+        $WaveComplete => $InGame {
+            $>() {
+                this.wave_timer = 0.0
+            }
+
+            tick(dt: float) {
+                this.wave_timer = this.wave_timer + dt
+                if (this.wave_timer >= this.wave_pause) {
+                    this.wave = this.wave + 1
+                    this.fleet.reset(this.fleet_rows, this.fleet_cols)
+                    -> $Playing
+                }
+            }
+
+            get_state(): string { @@:("wave_complete") }
             => $^
         }
 
         $Paused {
-            resume() { -> pop$ }
-        }
-
-        $Victory {
-            restart() {
-                this.points = 0
-                this.ships = 3
-                this.alive = this.invaderCount
-                -> $Title
+            resume() {
+                -> pop$
             }
+
+            get_state(): string { @@:("paused") }
+            get_score(): int    { @@:(this.score) }
+            get_lives(): int    { @@:(this.player.get_lives()) }
+            get_wave(): int     { @@:(this.wave) }
+            is_paused(): bool   { @@:(true) }
         }
 
         $GameOver {
             restart() {
-                this.points = 0
-                this.ships = 3
-                this.alive = this.invaderCount
-                -> $Title
+                -> $Attract
             }
+
+            get_state(): string { @@:("game_over") }
+            get_score(): int    { @@:(this.score) }
+            get_lives(): int    { @@:(this.player.get_lives()) }
+            get_wave(): int     { @@:(this.wave) }
+            is_paused(): bool   { @@:(false) }
         }
 
     domain:
-        points: int = 0
-        ships: int = 3
-        invaderCount: int = 24
-        alive: int = 24
+        score: int = 0
+        wave: int = 1
+        wave_timer: float = 0.0
+        wave_pause: float = 2.0
+        fleet_rows: int = 5
+        fleet_cols: int = 11
+        points_per_invader: int = 10
+        player = @@Player()
+        fleet = @@Fleet()
 }
