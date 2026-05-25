@@ -1,68 +1,317 @@
 @@[target("javascript")]
 
-// Stealth — guard AI as a flat FSM (Frame as an alternative to behavior trees).
-// Patrol -> Suspicious -> Alert -> Search -> Return -> Patrol, with the obvious
-// re-acquire / give-up edges. The chart is the guard's "mind" — its current
-// state lights up as it reacts to the player.
-@@system GuardAI {
+// Stealth — guard agent AI as two composed state machines.
+//
+// CANONICAL: mirrors the Godot reference
+// (frame-arcade/ch08-stealth/frame/stealth.fgd) exactly — the same
+// two systems (Guard / Stealth), states, transitions, the $Aware
+// HSM parent that shares the spot_player response, the
+// push$/pop$ investigate-then-resume subroutine, the three owned
+// Guard instances (guard1/guard2/guard3), and the Stealth game
+// flow $Attract -> $Playing -> $Caught/$Escaped plus the
+// push$/pop$ pause. Only action bodies differ (JS): Vector2
+// becomes a plain {x, y} object, distance_to becomes Math.hypot,
+// Array becomes list. The Godot @@[persist]/@@[save]/@@[load]
+// attributes are dropped here (no save system in the JS arcade);
+// dropping them leaves the topology unchanged.
+//
+// WHAT FRAME OWNS vs WHAT THE DRIVER OWNS (same split as Godot):
+// Frame owns each guard's mind — its mode, timers, last-known
+// memory, patrol cursor, and the target it wants to walk toward.
+// The scene/driver owns the world geometry — actual positions,
+// the maze, vision-cone math, line-of-sight, and collision. The
+// driver perceives ("can guard i see the player?") and reports
+// facts back via spot_player; the Frame side reacts.
 
-    operations:
-        current_state(): string { @@:(@@:system.state) }
-        alerts(): int { @@:(this.detections) }
+@@system Guard {
 
     interface:
-        start()
-        spotted()
-        confirmed()
-        lost()
-        searched()
-        returned()
-        caught_player()
-        pause()
-        resume()
-        restart()
+        init(patrol: list, speed: float)
+        tick(dt: float, current_pos: Vector2)
+        spot_player(at: Vector2)
+        hear_sound(at: Vector2)
+        touched_player()
+        get_state(): string
+        get_target(): Vector2
+        get_last_known(): Vector2
+        is_aware(): bool
+        is_alerted(): bool
+        should_move(): bool
 
     machine:
         $Idle {
-            start() { -> $Patrol }
-        }
-
-        $Patrol {
-            spotted() { -> $Suspicious }
-            pause() { push$ -> $Paused }
-        }
-
-        $Suspicious {
-            confirmed() {
-                this.detections = this.detections + 1
-                -> $Alert
+            init(patrol: list, speed: float) {
+                this.patrol = patrol
+                this.speed = speed
+                this.next_wp = 0
+                if (patrol.length > 0) {
+                    this.target = patrol[0]
+                }
+                -> $Patrolling
             }
-            lost() { -> $Patrol }
+
+            tick(dt: float, current_pos: Vector2) {
+            }
+
+            get_state(): string         { @@:("idle") }
+            get_target(): Vector2       { @@:(this.target) }
+            get_last_known(): Vector2   { @@:(this.last_known) }
+            is_aware(): bool            { @@:(false) }
+            is_alerted(): bool          { @@:(false) }
+            should_move(): bool         { @@:(false) }
         }
 
-        $Alert {
-            caught_player() { -> $Caught }
-            lost() { -> $Search }
+        $Aware {
+            spot_player(at: Vector2) {
+                this.last_known = at
+                -> $Alerted
+            }
+
+            touched_player() {
+                -> $Engaged
+            }
+
+            get_state(): string         { @@:("aware") }
+            get_target(): Vector2       { @@:(this.target) }
+            get_last_known(): Vector2   { @@:(this.last_known) }
+            is_aware(): bool            { @@:(true) }
+            is_alerted(): bool          { @@:(false) }
+            should_move(): bool         { @@:(true) }
         }
 
-        $Search {
-            spotted() { -> $Alert }
-            searched() { -> $Return }
+        $Patrolling => $Aware {
+            tick(dt: float, current_pos: Vector2) {
+                if (this.patrol.length == 0) {
+                    return
+                }
+                let d = Math.hypot(current_pos.x - this.target.x, current_pos.y - this.target.y)
+                if (d < this.ARRIVAL_RADIUS) {
+                    this.next_wp = this.next_wp + 1
+                    if (this.next_wp >= this.patrol.length) {
+                        this.next_wp = 0
+                    }
+                    this.target = this.patrol[this.next_wp]
+                }
+            }
+
+            hear_sound(at: Vector2) {
+                push$
+                this.last_known = at
+                -> $Investigating
+            }
+
+            get_state(): string         { @@:("patrolling") }
+            is_aware(): bool            { @@:(false) }
+            should_move(): bool         { @@:(true) }
+            => $^
         }
 
-        $Return {
-            spotted() { -> $Suspicious }
-            returned() { -> $Patrol }
+        $Investigating => $Aware {
+            $.timer: float = 0.0
+
+            tick(dt: float, current_pos: Vector2) {
+                $.timer = $.timer + dt
+                if ($.timer >= this.INVESTIGATE_DURATION) {
+                    -> pop$
+                }
+            }
+
+            get_state(): string { @@:("investigating") }
+            should_move(): bool { @@:(false) }
+            => $^
         }
 
-        $Caught {
-            restart() { -> $Idle }
+        $Alerted => $Aware {
+            $.chase_timer: float = 0.0
+
+            spot_player(at: Vector2) {
+                this.last_known = at
+                $.chase_timer = 0.0
+            }
+
+            tick(dt: float, current_pos: Vector2) {
+                this.target = this.last_known
+                $.chase_timer = $.chase_timer + dt
+                let d = Math.hypot(current_pos.x - this.last_known.x, current_pos.y - this.last_known.y)
+                if (d < this.ARRIVAL_RADIUS) {
+                    -> $Searching
+                } else if ($.chase_timer >= this.CHASE_TIMEOUT) {
+                    -> $Searching
+                }
+            }
+
+            get_state(): string { @@:("alerted") }
+            is_alerted(): bool  { @@:(true) }
+            should_move(): bool { @@:(true) }
+            => $^
         }
 
-        $Paused {
-            resume() { -> pop$ }
+        $Searching => $Aware {
+            $.timer: float = 0.0
+
+            tick(dt: float, current_pos: Vector2) {
+                $.timer = $.timer + dt
+                if ($.timer >= this.SEARCH_DURATION) {
+                    this._resume_patrol(current_pos)
+                    -> $Patrolling
+                }
+            }
+
+            get_state(): string { @@:("searching") }
+            should_move(): bool { @@:(false) }
+            => $^
+        }
+
+        $Engaged {
+            tick(dt: float, current_pos: Vector2) {
+            }
+
+            get_state(): string         { @@:("engaged") }
+            get_target(): Vector2       { @@:(this.target) }
+            get_last_known(): Vector2   { @@:(this.last_known) }
+            is_aware(): bool            { @@:(true) }
+            is_alerted(): bool          { @@:(true) }
+            should_move(): bool         { @@:(false) }
+        }
+
+    actions:
+        _resume_patrol(current_pos: Vector2) {
+            if (this.patrol.length == 0) {
+                return
+            }
+            let best_i = 0
+            let best_d = Math.hypot(current_pos.x - this.patrol[0].x, current_pos.y - this.patrol[0].y)
+            let i = 1
+            while (i < this.patrol.length) {
+                let d = Math.hypot(current_pos.x - this.patrol[i].x, current_pos.y - this.patrol[i].y)
+                if (d < best_d) {
+                    best_d = d
+                    best_i = i
+                }
+                i = i + 1
+            }
+            this.next_wp = best_i
+            this.target = this.patrol[best_i]
         }
 
     domain:
-        detections: int = 0
+        patrol: list = []
+        next_wp: int = 0
+        target: Vector2 = { x: 0.0, y: 0.0 }
+        last_known: Vector2 = { x: 0.0, y: 0.0 }
+        speed: float = 60.0
+        ARRIVAL_RADIUS: float = 12.0
+        INVESTIGATE_DURATION: float = 1.5
+        SEARCH_DURATION: float = 3.0
+        CHASE_TIMEOUT: float = 4.0
+}
+
+@@[main]
+@@system Stealth {
+
+    operations:
+        current_state(): string { @@:(@@:system.state) }
+
+    interface:
+        start(p1: list, p2: list, p3: list)
+        restart()
+        give_up()
+        pause()
+        resume()
+        tick(dt: float, pos1: Vector2, pos2: Vector2, pos3: Vector2)
+        guard_caught_player(i: int)
+        player_at_exit()
+        get_state(): string
+        get_elapsed(): float
+        get_caught_by(): int
+
+    machine:
+        $Attract {
+            $>() {
+                this.elapsed = 0.0
+                this.caught_by = -1
+            }
+
+            start(p1: list, p2: list, p3: list) {
+                this.guard1.init(p1, this.PATROL_SPEED)
+                this.guard2.init(p2, this.PATROL_SPEED)
+                this.guard3.init(p3, this.PATROL_SPEED)
+                -> $Playing
+            }
+
+            get_state(): string     { @@:("attract") }
+            get_elapsed(): float    { @@:(0.0) }
+            get_caught_by(): int    { @@:(-1) }
+        }
+
+        $Playing {
+            tick(dt: float, pos1: Vector2, pos2: Vector2, pos3: Vector2) {
+                this.elapsed = this.elapsed + dt
+                this.guard1.tick(dt, pos1)
+                this.guard2.tick(dt, pos2)
+                this.guard3.tick(dt, pos3)
+            }
+
+            guard_caught_player(i: int) {
+                this.caught_by = i
+                if (i == 0) {
+                    this.guard1.touched_player()
+                } else if (i == 1) {
+                    this.guard2.touched_player()
+                } else if (i == 2) {
+                    this.guard3.touched_player()
+                }
+                -> $Caught
+            }
+
+            player_at_exit() {
+                -> $Escaped
+            }
+
+            pause() {
+                push$ -> $Paused
+            }
+
+            get_state(): string     { @@:("playing") }
+            get_elapsed(): float    { @@:(this.elapsed) }
+            get_caught_by(): int    { @@:(this.caught_by) }
+        }
+
+        $Paused {
+            resume() {
+                -> pop$
+            }
+
+            get_state(): string     { @@:("paused") }
+            get_elapsed(): float    { @@:(this.elapsed) }
+            get_caught_by(): int    { @@:(this.caught_by) }
+        }
+
+        $Caught {
+            restart() {
+                -> $Attract
+            }
+
+            get_state(): string     { @@:("caught") }
+            get_elapsed(): float    { @@:(this.elapsed) }
+            get_caught_by(): int    { @@:(this.caught_by) }
+        }
+
+        $Escaped {
+            restart() {
+                -> $Attract
+            }
+
+            get_state(): string     { @@:("escaped") }
+            get_elapsed(): float    { @@:(this.elapsed) }
+            get_caught_by(): int    { @@:(-1) }
+        }
+
+    domain:
+        guard1 = @@Guard()
+        guard2 = @@Guard()
+        guard3 = @@Guard()
+        elapsed: float = 0.0
+        caught_by: int = -1
+        PATROL_SPEED: float = 95.0
 }
