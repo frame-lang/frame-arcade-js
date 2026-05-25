@@ -215,7 +215,6 @@
     interface:
         start(p1: list, p2: list, p3: list)
         restart()
-        give_up()
         pause()
         resume()
         tick(dt: float, pos1: Vector2, pos2: Vector2, pos3: Vector2)

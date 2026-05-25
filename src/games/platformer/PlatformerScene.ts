@@ -44,7 +44,6 @@ export class PlatformerScene extends Phaser.Scene {
   private scoreText!: Phaser.GameObjects.Text;
   private stateText!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
-  private prev = "";
 
   constructor(machine: PlatformerMachine) {
     super("Platformer");
@@ -106,7 +105,6 @@ export class PlatformerScene extends Phaser.Scene {
 
     if (s !== "Title" && s !== "Win" && s !== "Paused") this.step(dt);
 
-    this.prev = s;
     this.scoreText.setText(`coins ${this.m.coins()} / 3`);
     this.stateText.setText(`state: ${s}`);
     this.hintText.setText(this.hint(s));

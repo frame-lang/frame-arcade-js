@@ -10,7 +10,6 @@ import { instance } from "@viz-js/viz";
  * `@@:system.state` returns that same string — so highlighting is a name match.
  */
 export class StateChart {
-  private svg: SVGSVGElement | null = null;
   private nodes = new Map<string, SVGGElement>();
   private current: string | null = null;
 
@@ -28,7 +27,6 @@ export class StateChart {
     svg.style.height = "100%";
 
     this.container.replaceChildren(svg);
-    this.svg = svg;
 
     // Index nodes by state name (graphviz: <g class="node"><title>State</title>…).
     this.nodes.clear();
