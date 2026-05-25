@@ -62,7 +62,7 @@ export class ShooterScene extends Phaser.Scene {
   }
   private onPause(): void {
     const s = this.m.current_state();
-    if (s === "Wave") this.m.pause();
+    if (s === "Wave" || s === "Phase1" || s === "Phase2" || s === "Phase3") this.m.pause();
     else if (s === "Paused") this.m.resume();
   }
 

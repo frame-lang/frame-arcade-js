@@ -76,7 +76,7 @@ export class PongScene extends Phaser.Scene {
 
   private onPause(): void {
     const s = this.m.current_state();
-    if (s === "Rally") this.m.pause();
+    if (s === "Serve" || s === "Rally") this.m.pause();
     else if (s === "Paused") this.m.resume();
   }
 

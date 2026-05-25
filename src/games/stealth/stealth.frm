@@ -29,7 +29,7 @@
 
         $Patrol {
             spotted() { -> $Suspicious }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         $Suspicious {
@@ -60,7 +60,7 @@
         }
 
         $Paused {
-            resume() { -> $Patrol }
+            resume() { -> pop$ }
         }
 
     domain:

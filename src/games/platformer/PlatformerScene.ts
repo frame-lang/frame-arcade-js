@@ -10,6 +10,8 @@ export interface PlatformerMachine {
   land(): void;
   coin(): void;
   goal(): void;
+  pause(): void;
+  resume(): void;
   restart(): void;
   current_state(): string;
   coins(): number;
@@ -63,7 +65,14 @@ export class PlatformerScene extends Phaser.Scene {
 
     this.keys = this.input.keyboard!.addKeys("A,D,LEFT,RIGHT,W,UP,SPACE") as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on("keydown-SPACE", () => this.onSpace());
+    this.input.keyboard!.on("keydown-P", () => this.onPause());
     this.buildCoins();
+  }
+
+  private onPause(): void {
+    const s = this.m.current_state();
+    if (s === "Idle" || s === "Running" || s === "Jumping" || s === "Falling") this.m.pause();
+    else if (s === "Paused") this.m.resume();
   }
 
   private onSpace(): void {
@@ -95,7 +104,7 @@ export class PlatformerScene extends Phaser.Scene {
     const dt = Math.min(deltaMs / 1000, 0.033);
     const s = this.m.current_state();
 
-    if (s !== "Title" && s !== "Win") this.step(dt);
+    if (s !== "Title" && s !== "Win" && s !== "Paused") this.step(dt);
 
     this.prev = s;
     this.scoreText.setText(`coins ${this.m.coins()} / 3`);
@@ -176,7 +185,8 @@ export class PlatformerScene extends Phaser.Scene {
     switch (s) {
       case "Title": return "SPACE to start";
       case "Win": return "Reached the flag! · SPACE to restart";
-      default: return "A/D move · W/↑ jump · grab coins · reach the flag";
+      case "Paused": return "P to resume";
+      default: return "A/D move · W/↑ jump · P pause · grab coins · reach the flag";
     }
   }
 }

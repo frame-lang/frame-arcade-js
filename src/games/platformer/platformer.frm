@@ -21,6 +21,8 @@
         land()
         coin()
         goal()
+        pause()
+        resume()
         restart()
 
     machine:
@@ -33,6 +35,7 @@
             step_off() { -> $Falling }
             coin() { this.collected = this.collected + 1 }
             goal() { -> $Win }
+            pause() { push$ -> $Paused }
         }
 
         $Idle => $OnGround {
@@ -47,6 +50,7 @@
 
         $InAir {
             coin() { this.collected = this.collected + 1 }
+            pause() { push$ -> $Paused }
         }
 
         $Jumping => $InAir {
@@ -57,6 +61,10 @@
         $Falling => $InAir {
             land() { -> $Idle }
             => $^
+        }
+
+        $Paused {
+            resume() { -> pop$ }
         }
 
         $Win {

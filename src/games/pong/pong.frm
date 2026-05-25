@@ -32,7 +32,7 @@
 
         $Serve {
             serve() { -> $Rally }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         $Rally {
@@ -48,11 +48,11 @@
                 }
                 -> $Serve
             }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         $Paused {
-            resume() { -> $Rally }
+            resume() { -> pop$ }
         }
 
         $GameOver {

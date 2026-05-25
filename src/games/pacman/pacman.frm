@@ -46,7 +46,7 @@
                 }
                 -> $Scatter
             }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         $Scatter => $Hunting {
@@ -75,7 +75,7 @@
         }
 
         $Paused {
-            resume() { -> $Scatter }
+            resume() { -> pop$ }
         }
 
         $Win {

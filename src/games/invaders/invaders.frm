@@ -41,7 +41,7 @@
                     -> $GameOver
                 }
             }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         $Marching => $Wave {
@@ -55,7 +55,7 @@
         }
 
         $Paused {
-            resume() { -> $Marching }
+            resume() { -> pop$ }
         }
 
         $Victory {

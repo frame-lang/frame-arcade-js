@@ -36,7 +36,7 @@
                     -> $GameOver
                 }
             }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         // Parent: shared boss-fight behavior.
@@ -47,6 +47,7 @@
                     -> $GameOver
                 }
             }
+            pause() { push$ -> $Paused }
         }
 
         $Phase1 => $Boss {
@@ -80,7 +81,7 @@
         }
 
         $Paused {
-            resume() { -> $Wave }
+            resume() { -> pop$ }
         }
 
         $Victory {

@@ -66,7 +66,7 @@ export class BreakoutScene extends Phaser.Scene {
   }
   private onPause(): void {
     const s = this.m.current_state();
-    if (s === "Playing") this.m.pause();
+    if (s === "Serve" || s === "Playing" || s === "Cleared") this.m.pause();
     else if (s === "Paused") this.m.resume();
   }
 

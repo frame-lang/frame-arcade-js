@@ -9,7 +9,17 @@ framec version: **4.2.1** (`framec --version`).
 
 ## BUG-1 — `push$ -> $State` is broken on the JavaScript target
 
-**Status:** open · **Blocks:** Asteroids (state-stack / hyperspace showcase)
+**Status:** ✅ FIXED in framec (`fix(codegen js/ts)`, commit `26dcf12` on
+branch `fix-js-pushpop`; installed as framec 4.2.3). The JS/TS arm of
+`expand_stack_push` now emits the compartment model (`__prepareEnter` +
+`__transition` + return) like a normal transition. Asteroids is un-parked and
+pause/resume now use `push$ -> $Paused` / `-> pop$` across all games.
+Remaining: the `W414` reachability false-positive for `push$ -> $State` targets
+(cosmetic) is still open. Filed in framec's tracker as Issue #42.
+
+<details><summary>Original report</summary>
+
+**Blocks:** Asteroids (state-stack / hyperspace showcase)
 
 A `push$ -> $State` transition generates a call to a non-existent method and
 never touches the state stack, so it throws at runtime.
@@ -61,3 +71,5 @@ doesn't appear to count `push$ -> $State` as reaching the target state.
 None applied. Asteroids is parked until this is fixed in framec — faking
 hyperspace with a plain transition would misrepresent the state-stack feature
 the chapter is meant to demonstrate.
+
+</details>

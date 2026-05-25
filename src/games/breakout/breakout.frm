@@ -27,7 +27,7 @@
 
         $Serve {
             serve() { -> $Playing }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         $Playing {
@@ -45,7 +45,7 @@
                 }
                 -> $Serve
             }
-            pause() { -> $Paused }
+            pause() { push$ -> $Paused }
         }
 
         $Cleared {
@@ -54,10 +54,11 @@
                 this.remaining = this.brickCount
                 -> $Playing
             }
+            pause() { push$ -> $Paused }
         }
 
         $Paused {
-            resume() { -> $Playing }
+            resume() { -> pop$ }
         }
 
         $GameOver {
