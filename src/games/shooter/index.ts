@@ -1,14 +1,15 @@
-import { ShooterGame } from "./shooter.machine.js";
+import { Shooter } from "./shooter.machine.js";
 import dot from "./shooter.dot?raw";
 import { ShooterScene } from "./ShooterScene";
 import type { GameDef } from "../types";
 
 export const shooter: GameDef = {
   id: "shooter",
-  title: "Shooter (Boss)",
-  teaches: "Multi-phase boss HSM · $Boss parent · $Phase1/2/3 by HP threshold",
-  controls: "A/D move · hold SPACE fire · P pause · SPACE start/restart",
+  title: "Shooter (capstone)",
+  teaches:
+    "Everything composed at scale · parameterized Enemy instances · three-phase Boss HSM (HP-threshold phase changes) · orchestrator with waves + push$/pop$ pause",
+  controls: "Arrows/WASD move · hold SPACE fire · P pause · SPACE start · R restart",
   dot,
-  createMachine: () => ShooterGame._create(),
+  createMachine: () => Shooter._create(),
   Scene: ShooterScene,
 };
