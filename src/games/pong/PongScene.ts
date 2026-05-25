@@ -1,0 +1,159 @@
+import Phaser from "phaser";
+
+/** The public surface of the Frame-generated PongGame machine (the "brain"). */
+export interface PongMachine {
+  start(): void;
+  serve(): void;
+  point_scored(scorer: string): void;
+  pause(): void;
+  resume(): void;
+  restart(): void;
+  current_state(): string;
+  left_score(): number;
+  right_score(): number;
+  win_score(): number;
+}
+
+export const GAME_W = 720;
+export const GAME_H = 480;
+const PADDLE_W = 12;
+const PADDLE_H = 84;
+const BALL = 12;
+const PADDLE_SPEED = 400;
+const BALL_SPEED = 340;
+
+/**
+ * Phaser is the "body": rendering, input, and per-frame physics. It never
+ * decides game *flow* — it reads `current_state()` to know what to do and fires
+ * interface events (`serve`, `point_scored`, …) into the Frame machine when
+ * play demands a flow change. The machine owns every state transition.
+ */
+export class PongScene extends Phaser.Scene {
+  private m: PongMachine;
+  private left!: Phaser.GameObjects.Rectangle;
+  private right!: Phaser.GameObjects.Rectangle;
+  private ball!: Phaser.GameObjects.Rectangle;
+  private scoreText!: Phaser.GameObjects.Text;
+  private stateText!: Phaser.GameObjects.Text;
+  private hintText!: Phaser.GameObjects.Text;
+  private keys!: Record<string, Phaser.Input.Keyboard.Key>;
+  private bvx = 0;
+  private bvy = 0;
+  private prev = "";
+
+  constructor(machine: PongMachine) {
+    super("Pong");
+    this.m = machine;
+  }
+
+  create(): void {
+    for (let y = 10; y < GAME_H; y += 28) {
+      this.add.rectangle(GAME_W / 2, y, 3, 14, 0x2b3242);
+    }
+    this.left = this.add.rectangle(28, GAME_H / 2, PADDLE_W, PADDLE_H, 0x8ab4f8);
+    this.right = this.add.rectangle(GAME_W - 28, GAME_H / 2, PADDLE_W, PADDLE_H, 0xf28b82);
+    this.ball = this.add.rectangle(GAME_W / 2, GAME_H / 2, BALL, BALL, 0xffffff);
+
+    const mono = { fontFamily: "monospace", color: "#e6e1e8" };
+    this.scoreText = this.add.text(GAME_W / 2, 22, "0 : 0", { ...mono, fontSize: "30px" }).setOrigin(0.5);
+    this.stateText = this.add.text(GAME_W / 2, 52, "", { ...mono, fontSize: "12px", color: "#7c8499" }).setOrigin(0.5);
+    this.hintText = this.add.text(GAME_W / 2, GAME_H - 26, "", { ...mono, fontSize: "15px", color: "#9aa4b8" }).setOrigin(0.5);
+
+    this.keys = this.input.keyboard!.addKeys("W,S,UP,DOWN") as Record<string, Phaser.Input.Keyboard.Key>;
+    this.input.keyboard!.on("keydown-SPACE", () => this.onAction());
+    this.input.keyboard!.on("keydown-P", () => this.onPause());
+
+    this.centerBall();
+  }
+
+  private onAction(): void {
+    switch (this.m.current_state()) {
+      case "Attract": this.m.start(); break;
+      case "Serve": this.m.serve(); this.launch(); break;
+      case "GameOver": this.m.restart(); break;
+    }
+  }
+
+  private onPause(): void {
+    const s = this.m.current_state();
+    if (s === "Rally") this.m.pause();
+    else if (s === "Paused") this.m.resume();
+  }
+
+  private centerBall(): void {
+    this.ball.setPosition(GAME_W / 2, GAME_H / 2);
+    this.bvx = 0;
+    this.bvy = 0;
+  }
+
+  private launch(): void {
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const angle = Phaser.Math.FloatBetween(-0.35, 0.35);
+    this.bvx = Math.cos(angle) * BALL_SPEED * dir;
+    this.bvy = Math.sin(angle) * BALL_SPEED;
+  }
+
+  update(_time: number, deltaMs: number): void {
+    const dt = deltaMs / 1000;
+    const s = this.m.current_state();
+
+    // Re-center the ball when a new point begins or the game resets.
+    if ((s === "Serve" || s === "Attract") && this.prev !== s) this.centerBall();
+    this.prev = s;
+
+    if (s === "Rally") this.stepRally(dt);
+
+    this.scoreText.setText(`${this.m.left_score()} : ${this.m.right_score()}`);
+    this.stateText.setText(`state: ${s}`);
+    this.hintText.setText(this.hint(s));
+  }
+
+  private stepRally(dt: number): void {
+    if (this.keys.W.isDown || this.keys.UP.isDown) this.left.y -= PADDLE_SPEED * dt;
+    if (this.keys.S.isDown || this.keys.DOWN.isDown) this.left.y += PADDLE_SPEED * dt;
+    this.clamp(this.left);
+
+    // right paddle: simple tracking AI
+    const dy = this.ball.y - this.right.y;
+    this.right.y += Phaser.Math.Clamp(dy, -PADDLE_SPEED * dt, PADDLE_SPEED * dt);
+    this.clamp(this.right);
+
+    this.ball.x += this.bvx * dt;
+    this.ball.y += this.bvy * dt;
+    if (this.ball.y < BALL / 2) { this.ball.y = BALL / 2; this.bvy = Math.abs(this.bvy); }
+    if (this.ball.y > GAME_H - BALL / 2) { this.ball.y = GAME_H - BALL / 2; this.bvy = -Math.abs(this.bvy); }
+
+    this.bounce(this.left, 1);
+    this.bounce(this.right, -1);
+
+    if (this.ball.x < -BALL) this.m.point_scored("right");
+    else if (this.ball.x > GAME_W + BALL) this.m.point_scored("left");
+  }
+
+  private bounce(paddle: Phaser.GameObjects.Rectangle, dir: number): void {
+    const overlap =
+      Math.abs(this.ball.x - paddle.x) < (PADDLE_W + BALL) / 2 &&
+      Math.abs(this.ball.y - paddle.y) < (PADDLE_H + BALL) / 2;
+    if (overlap && Math.sign(this.bvx) === -dir) {
+      this.bvx = Math.abs(this.bvx) * dir;
+      const off = (this.ball.y - paddle.y) / (PADDLE_H / 2);
+      this.bvy = off * BALL_SPEED * 0.8;
+    }
+  }
+
+  private clamp(p: Phaser.GameObjects.Rectangle): void {
+    p.y = Phaser.Math.Clamp(p.y, PADDLE_H / 2, GAME_H - PADDLE_H / 2);
+  }
+
+  private hint(s: string): string {
+    switch (s) {
+      case "Attract": return "SPACE to start";
+      case "Serve": return "SPACE to serve  ·  W/S move  ·  P pause";
+      case "Rally": return "W/S move  ·  P pause";
+      case "Paused": return "P to resume";
+      case "GameOver":
+        return `${this.m.left_score() >= this.m.win_score() ? "LEFT" : "RIGHT"} wins!  ·  SPACE to play again`;
+      default: return "";
+    }
+  }
+}

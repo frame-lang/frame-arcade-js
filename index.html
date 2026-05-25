@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Frame Arcade — Pong</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Frame Arcade — Pong</h1>
+      <p>
+        The game logic is a <strong>Frame state machine</strong>. The chart on the
+        right is generated from the same <code>.frm</code> spec — the glowing node
+        is the machine's live state as you play.
+      </p>
+    </header>
+    <main>
+      <div id="game"></div>
+      <aside id="viz" aria-label="Live Frame state chart"></aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

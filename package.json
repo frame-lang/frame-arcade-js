@@ -1,0 +1,24 @@
+{
+  "name": "frame-arcade-js",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Classic arcade games as Frame state machines, rendered with Phaser, with a live state chart beside the gameplay.",
+  "scripts": {
+    "gen": "bash scripts/gen.sh",
+    "predev": "npm run gen",
+    "dev": "vite",
+    "prebuild": "npm run gen",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@viz-js/viz": "^3.2.4",
+    "phaser": "^3.88.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8"
+  }
+}

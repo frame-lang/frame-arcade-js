@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# framec-generated artifacts — regenerate with `npm run gen`
+src/games/*/*.machine.js
+src/games/*/*.dot
