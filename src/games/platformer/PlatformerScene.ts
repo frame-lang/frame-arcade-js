@@ -1,49 +1,83 @@
 import Phaser from "phaser";
 
+/**
+ * Public surface of the canonical Platformer machine (mirrors the
+ * Godot reference, ch06-platformer). The machine owns only the
+ * character's MIND — the Locomotion mode (idle/walk/run/jump/
+ * fall/land) and the PowerUp form (small/big/fiery), plus the
+ * orchestrator's push$/pop$ pause. This scene is a thin driver like
+ * Godot main.gd: it owns the WORLD — platforms, gravity, AABB
+ * collision, pickups, and the body's position. It reads the FSM's
+ * velocity *wishes* each frame and reports physics facts
+ * (ground_contact / left_ground / pickup_*) back.
+ */
 export interface PlatformerMachine {
-  start(): void;
-  run(): void;
-  halt(): void;
-  jump(): void;
-  step_off(): void;
-  apex(): void;
-  land(): void;
-  coin(): void;
-  goal(): void;
+  tick(dt: number): void;
+  press_left(): void;
+  press_right(): void;
+  release_horizontal(): void;
+  press_sprint(): void;
+  release_sprint(): void;
+  press_jump(): void;
+  release_jump(): void;
+  ground_contact(): void;
+  left_ground(): void;
+  pickup_mushroom(): void;
+  pickup_flower(): void;
+  take_damage(): boolean;
   pause(): void;
   resume(): void;
-  restart(): void;
+  is_paused(): boolean;
   current_state(): string;
-  coins(): number;
+  locomotion_state(): string;
+  form(): string;
+  wants_velocity_x(): number;
+  wants_jump_impulse(): boolean;
+  consume_jump_impulse(): void;
+  facing(): number;
+  is_grounded(): boolean;
+  is_in_air(): boolean;
+  hit_box_height(): number;
+  can_shoot(): boolean;
 }
 
 const W = 720;
 const H = 480;
-const RUN = 240;
-const JUMP = 560;
-const GRAVITY = 1500;
-const PW = 22;
-const PH = 30;
+const PLAYER_W = 24;
+const JUMP_IMPULSE = 540;
+const JUMP_CUT = 0.4;
+const GRAVITY = 900;
+const TERMINAL = 600;
 
-interface Plat { x: number; y: number; w: number; }
+interface Rect { x: number; y: number; w: number; h: number; }
+interface Pickup { x: number; y: number; w: number; h: number; alive: boolean; }
+
+const SPAWN = { x: 60, y: 400 };
 
 export class PlatformerScene extends Phaser.Scene {
   private m: PlatformerMachine;
-  private player!: Phaser.GameObjects.Rectangle;
-  private goalFlag!: Phaser.GameObjects.Rectangle;
-  private coinObjs: Phaser.GameObjects.Arc[] = [];
-  private platforms: Plat[] = [
-    { x: 0, y: H - 20, w: W }, // ground
-    { x: 180, y: 360, w: 140 },
-    { x: 400, y: 290, w: 140 },
-    { x: 590, y: 210, w: 120 },
-  ];
+  private px = SPAWN.x;
+  private py = SPAWN.y;
   private vx = 0;
   private vy = 0;
+  private wasGrounded = true;
+
+  private platforms: Rect[] = [];
+  private mushroom!: Pickup;
+  private flower!: Pickup;
+
+  // Edge-detected input flags (mirror the Godot driver).
+  private leftDown = false;
+  private rightDown = false;
+  private sprintDown = false;
+  private jumpDown = false;
+  private pauseDown = false;
+
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
-  private scoreText!: Phaser.GameObjects.Text;
-  private stateText!: Phaser.GameObjects.Text;
-  private hintText!: Phaser.GameObjects.Text;
+  private platformGfx!: Phaser.GameObjects.Graphics;
+  private gfx!: Phaser.GameObjects.Graphics;
+  private hudText!: Phaser.GameObjects.Text;
+  private centerText!: Phaser.GameObjects.Text;
 
   constructor(machine: PlatformerMachine) {
     super("Platformer");
@@ -51,140 +85,245 @@ export class PlatformerScene extends Phaser.Scene {
   }
 
   create(): void {
-    for (const p of this.platforms) {
-      this.add.rectangle(p.x, p.y, p.w, 12, 0x3a4252).setOrigin(0, 0);
-    }
-    this.goalFlag = this.add.rectangle(640, 188, 14, 22, 0xfbbc04).setOrigin(0, 0);
-    this.player = this.add.rectangle(40, H - 60, PW, PH, 0x8ab4f8);
+    this.platforms = [
+      { x: 0, y: 448, w: W, h: 32 }, // floor
+      { x: 100, y: 340, w: 130, h: 18 },
+      { x: 300, y: 260, w: 130, h: 18 },
+      { x: 500, y: 340, w: 130, h: 18 },
+      { x: 40, y: 180, w: 90, h: 18 }, // high ledge
+    ];
+    this.mushroom = { x: 360, y: 232, w: 18, h: 18, alive: true };
+    this.flower = { x: 60, y: 156, w: 18, h: 20, alive: true };
+
+    this.platformGfx = this.add.graphics();
+    this.drawPlatforms();
+    this.gfx = this.add.graphics();
 
     const mono = { fontFamily: "monospace", color: "#e6e1e8" };
-    this.scoreText = this.add.text(12, 10, "", { ...mono, fontSize: "15px" });
-    this.stateText = this.add.text(W - 12, 10, "", { ...mono, fontSize: "12px", color: "#7c8499" }).setOrigin(1, 0);
-    this.hintText = this.add.text(W / 2, 30, "", { ...mono, fontSize: "15px", color: "#9aa4b8" }).setOrigin(0.5, 0);
+    this.hudText = this.add.text(12, 10, "", { ...mono, fontSize: "15px" });
+    this.add.text(12, H - 22, "Arrows/WASD move · Shift run · Space jump · P pause · R reset pickups", {
+      ...mono,
+      fontSize: "13px",
+      color: "#9aa4b8",
+    });
+    this.centerText = this.add
+      .text(W / 2, H * 0.4, "", { ...mono, fontSize: "20px", align: "center", color: "#e6e1e8" })
+      .setOrigin(0.5);
 
-    this.keys = this.input.keyboard!.addKeys("A,D,LEFT,RIGHT,W,UP,SPACE") as Record<string, Phaser.Input.Keyboard.Key>;
-    this.input.keyboard!.on("keydown-SPACE", () => this.onSpace());
-    this.input.keyboard!.on("keydown-P", () => this.onPause());
-    this.buildCoins();
-  }
-
-  private onPause(): void {
-    const s = this.m.current_state();
-    if (s === "Idle" || s === "Running" || s === "Jumping" || s === "Falling") this.m.pause();
-    else if (s === "Paused") this.m.resume();
-  }
-
-  private onSpace(): void {
-    const s = this.m.current_state();
-    if (s === "Title" || s === "Win") {
-      if (s === "Win") this.m.restart();
-      else this.m.start();
-      this.respawn();
-    }
+    this.keys = this.input.keyboard!.addKeys("LEFT,RIGHT,UP,A,D,W,SHIFT,SPACE,P,R") as Record<
+      string,
+      Phaser.Input.Keyboard.Key
+    >;
   }
 
   private respawn(): void {
-    this.player.setPosition(40, H - 60);
+    this.px = SPAWN.x;
+    this.py = SPAWN.y;
     this.vx = 0;
     this.vy = 0;
-    this.buildCoins();
-  }
-
-  private buildCoins(): void {
-    this.coinObjs.forEach((c) => c.destroy());
-    this.coinObjs = [
-      this.add.circle(250, 340, 7, 0xfbbc04),
-      this.add.circle(470, 270, 7, 0xfbbc04),
-      this.add.circle(650, 190, 7, 0xfbbc04),
-    ];
+    this.wasGrounded = true;
   }
 
   update(_t: number, deltaMs: number): void {
     const dt = Math.min(deltaMs / 1000, 0.033);
-    const s = this.m.current_state();
 
-    if (s !== "Title" && s !== "Win" && s !== "Paused") this.step(dt);
+    // Pause toggle (P), edge-detected. Mirrors the Godot driver: the
+    // FSM owns the pause mode; we just freeze the world while paused.
+    const pNow = this.keys.P.isDown;
+    if (pNow && !this.pauseDown) {
+      if (this.m.is_paused()) this.m.resume();
+      else this.m.pause();
+    }
+    this.pauseDown = pNow;
 
-    this.scoreText.setText(`coins ${this.m.coins()} / 3`);
-    this.stateText.setText(`state: ${s}`);
-    this.hintText.setText(this.hint(s));
-  }
-
-  private step(dt: number): void {
-    const left = this.keys.A.isDown || this.keys.LEFT.isDown;
-    const right = this.keys.D.isDown || this.keys.RIGHT.isDown;
-    const jumpHeld = this.keys.W.isDown || this.keys.UP.isDown;
-    const moving = left !== right;
-    this.vx = (right ? RUN : 0) - (left ? RUN : 0);
-
-    const groundedBefore = this.onGround();
-    if (jumpHeld && groundedBefore && (this.m.current_state() === "Idle" || this.m.current_state() === "Running")) {
-      this.vy = -JUMP;
-      this.m.jump();
+    if (!this.m.is_paused()) {
+      this.handleInput();
+      this.m.tick(dt);
+      this.applyJumpImpulse();
+      this.vx = this.m.wants_velocity_x();
+      this.applyGravity(dt);
+      this.integrateAndCollide(dt);
+      this.updateGrounded();
+      this.checkPickups();
+      if (this.keys.R.isDown) {
+        this.mushroom.alive = true;
+        this.flower.alive = true;
+      }
     }
 
+    this.render();
+  }
+
+  private handleInput(): void {
+    const leftNow = this.keys.LEFT.isDown || this.keys.A.isDown;
+    const rightNow = this.keys.RIGHT.isDown || this.keys.D.isDown;
+    const sprintNow = this.keys.SHIFT.isDown;
+    const jumpNow = this.keys.SPACE.isDown || this.keys.UP.isDown || this.keys.W.isDown;
+
+    if (leftNow && !this.leftDown) this.m.press_left();
+    if (rightNow && !this.rightDown) this.m.press_right();
+    if (!leftNow && !rightNow && (this.leftDown || this.rightDown)) this.m.release_horizontal();
+    this.leftDown = leftNow;
+    this.rightDown = rightNow;
+
+    if (sprintNow && !this.sprintDown) this.m.press_sprint();
+    if (!sprintNow && this.sprintDown) this.m.release_sprint();
+    this.sprintDown = sprintNow;
+
+    if (jumpNow && !this.jumpDown) this.m.press_jump();
+    if (!jumpNow && this.jumpDown) {
+      this.m.release_jump();
+      // Variable jump height: releasing while ascending cuts the rise.
+      if (this.vy < 0) this.vy *= JUMP_CUT;
+    }
+    this.jumpDown = jumpNow;
+  }
+
+  private applyJumpImpulse(): void {
+    if (this.m.wants_jump_impulse()) {
+      this.vy = -JUMP_IMPULSE;
+      this.m.consume_jump_impulse();
+    }
+  }
+
+  private applyGravity(dt: number): void {
     this.vy += GRAVITY * dt;
-    if (this.m.current_state() === "Jumping" && this.vy >= 0) this.m.apex();
-
-    this.player.x = Phaser.Math.Clamp(this.player.x + this.vx * dt, PW / 2, W - PW / 2);
-    this.player.y += this.vy * dt;
-
-    const grounded = this.resolveLanding();
-
-    // reconcile machine locomotion with physics
-    const s = this.m.current_state();
-    if (grounded) {
-      if (s === "Jumping" || s === "Falling") this.m.land();
-      const s2 = this.m.current_state();
-      if (moving && s2 === "Idle") this.m.run();
-      else if (!moving && s2 === "Running") this.m.halt();
-    } else if (s === "Idle" || s === "Running") {
-      this.m.step_off();
-    }
-
-    // coins + goal
-    for (let i = this.coinObjs.length - 1; i >= 0; i--) {
-      if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this.coinObjs[i].x, this.coinObjs[i].y) < 20) {
-        this.coinObjs[i].destroy();
-        this.coinObjs.splice(i, 1);
-        this.m.coin();
-      }
-    }
-    if (this.player.x + PW / 2 > this.goalFlag.x && this.player.y < 220) this.m.goal();
-
-    if (this.player.y > H + 60) this.respawn(); // fell off
+    if (this.vy > TERMINAL) this.vy = TERMINAL;
   }
 
-  private feetY(): number { return this.player.y + PH / 2; }
+  private integrateAndCollide(dt: number): void {
+    const h = this.m.hit_box_height();
+    this.px += this.vx * dt;
+    this.resolveX(h);
+    this.py += this.vy * dt;
+    this.resolveY(h);
 
-  private onGround(): boolean {
-    const fx = this.player.x;
-    const fy = this.feetY();
-    return this.platforms.some(
-      (p) => fx > p.x - 2 && fx < p.x + p.w + 2 && Math.abs(fy - p.y) < 3,
-    );
+    if (this.px < 0) {
+      this.px = 0;
+      this.vx = 0;
+    }
+    if (this.px + PLAYER_W > W) {
+      this.px = W - PLAYER_W;
+      this.vx = 0;
+    }
+    if (this.py > H) this.respawn();
   }
 
-  private resolveLanding(): boolean {
-    if (this.vy < 0) return false;
-    const fx = this.player.x;
-    const fy = this.feetY();
+  private resolveX(h: number): void {
     for (const p of this.platforms) {
-      if (fx > p.x - 2 && fx < p.x + p.w + 2 && fy >= p.y && fy <= p.y + 16) {
-        this.player.y = p.y - PH / 2;
-        this.vy = 0;
-        return true;
+      if (this.intersects(this.px, this.py, PLAYER_W, h, p)) {
+        if (this.vx > 0) this.px = p.x - PLAYER_W;
+        else if (this.vx < 0) this.px = p.x + p.w;
+        this.vx = 0;
       }
     }
-    return false;
   }
 
-  private hint(s: string): string {
-    switch (s) {
-      case "Title": return "SPACE to start";
-      case "Win": return "Reached the flag! · SPACE to restart";
-      case "Paused": return "P to resume";
-      default: return "A/D move · W/↑ jump · P pause · grab coins · reach the flag";
+  private resolveY(h: number): void {
+    for (const p of this.platforms) {
+      if (this.intersects(this.px, this.py, PLAYER_W, h, p)) {
+        if (this.vy > 0) this.py = p.y - h;
+        else if (this.vy < 0) this.py = p.y + p.h;
+        this.vy = 0;
+      }
     }
+  }
+
+  private updateGrounded(): void {
+    const h = this.m.hit_box_height();
+    let grounded = false;
+    for (const p of this.platforms) {
+      if (this.intersects(this.px, this.py + 1, PLAYER_W, h, p)) {
+        grounded = true;
+        break;
+      }
+    }
+    if (grounded && !this.wasGrounded) this.m.ground_contact();
+    else if (!grounded && this.wasGrounded) this.m.left_ground();
+    this.wasGrounded = grounded;
+  }
+
+  private checkPickups(): void {
+    const h = this.m.hit_box_height();
+    if (this.mushroom.alive && this.intersects(this.px, this.py, PLAYER_W, h, this.mushroom)) {
+      this.m.pickup_mushroom();
+      this.mushroom.alive = false;
+    }
+    if (this.flower.alive && this.intersects(this.px, this.py, PLAYER_W, h, this.flower)) {
+      this.m.pickup_flower();
+      this.flower.alive = false;
+    }
+  }
+
+  private intersects(ax: number, ay: number, aw: number, ah: number, b: Rect): boolean {
+    return ax < b.x + b.w && ax + aw > b.x && ay < b.y + b.h && ay + ah > b.y;
+  }
+
+  private drawPlatforms(): void {
+    this.platformGfx.clear();
+    for (const p of this.platforms) {
+      this.platformGfx.fillStyle(0x735926, 1);
+      this.platformGfx.fillRect(p.x, p.y, p.w, p.h);
+      this.platformGfx.fillStyle(0xa6824d, 1);
+      this.platformGfx.fillRect(p.x, p.y, p.w, 3);
+    }
+  }
+
+  private render(): void {
+    this.gfx.clear();
+
+    if (this.mushroom.alive) this.drawMushroom(this.mushroom.x, this.mushroom.y);
+    if (this.flower.alive) this.drawFlower(this.flower.x, this.flower.y);
+
+    this.drawPlayer();
+
+    const paused = this.m.is_paused();
+    this.hudText.setText(
+      `STATE  ${this.m.locomotion_state()}     FORM  ${this.m.form()}     GROUNDED  ${this.m.is_grounded() ? "yes" : "no"}`,
+    );
+    this.centerText.setText(paused ? "PAUSED\n\nP to resume" : "");
+  }
+
+  private drawPlayer(): void {
+    const h = this.m.hit_box_height();
+    const form = this.m.form();
+    let color = 0xe53232; // small
+    if (form === "big") color = 0x4caf50;
+    else if (form === "fiery") color = 0xff8c1a;
+
+    this.gfx.fillStyle(color, 1);
+    this.gfx.fillRect(this.px, this.py, PLAYER_W, h);
+
+    // Eye on the facing side.
+    const eyeX = this.m.facing() > 0 ? this.px + PLAYER_W - 8 : this.px + 2;
+    this.gfx.fillStyle(0xffffff, 1);
+    this.gfx.fillRect(eyeX, this.py + 4, 6, 6);
+    this.gfx.fillStyle(0x000000, 1);
+    this.gfx.fillRect(eyeX + 1, this.py + 5, 4, 4);
+
+    // Landing squish tell.
+    if (this.m.locomotion_state() === "landing") {
+      this.gfx.fillStyle(0x000000, 0.25);
+      this.gfx.fillRect(this.px - 2, this.py + h - 4, PLAYER_W + 4, 4);
+    }
+  }
+
+  private drawMushroom(x: number, y: number): void {
+    this.gfx.fillStyle(0xe5d9bf, 1);
+    this.gfx.fillRect(x, y + 8, 18, 10);
+    this.gfx.fillStyle(0xd94040, 1);
+    this.gfx.fillRect(x, y, 18, 10);
+    this.gfx.fillStyle(0xffffff, 1);
+    this.gfx.fillRect(x + 3, y + 2, 3, 3);
+    this.gfx.fillRect(x + 11, y + 4, 3, 3);
+  }
+
+  private drawFlower(x: number, y: number): void {
+    this.gfx.fillStyle(0x33b34d, 1);
+    this.gfx.fillRect(x + 7, y + 12, 4, 8);
+    this.gfx.fillStyle(0xff661a, 1);
+    this.gfx.fillRect(x + 2, y + 2, 14, 10);
+    this.gfx.fillStyle(0xffd933, 1);
+    this.gfx.fillRect(x + 6, y + 6, 6, 6);
   }
 }

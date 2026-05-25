@@ -1,79 +1,431 @@
 @@[target("javascript")]
 
-// Platformer — locomotion as two HSM clusters:
-//   $OnGround = { $Idle, $Running }   $InAir = { $Jumping, $Falling }
-// Children inherit their cluster's shared handlers via `=> $^`. Phaser fires
-// run/halt/jump/apex/land/step_off as physics dictates; the chart shows which
-// locomotion state the player is in.
-@@system PlatformerGame {
+// Platformer — orthogonal-state composition (Frame's answer to the
+// exponential matrix-HSM problem).
+//
+// CANONICAL: mirrors the Godot reference
+// (frame-arcade/ch06-platformer/frame/platformer.fgd) exactly — the
+// same three systems (Locomotion / PowerUp / Platformer), states,
+// transitions, the $Jumping / $Landing state vars, the $Landing
+// enter handler, the two owned sub-systems (loco / power), and the
+// push$/pop$ pause added to the orchestrator. Only action bodies
+// differ (JS host code). The Godot @@... : RefCounted base is dropped.
+//
+// THE POINT: Locomotion (how you move) and PowerUp (what form you
+// are) are ORTHOGONAL. A single HSM combining them ($SmallJumping,
+// $BigJumping, $FieryRunning, ...) is exponential. Two independent
+// FSMs owned by one orchestrator are additive. Always prefer
+// composition over a matrix HSM.
+//
+// WHAT FRAME OWNS vs THE DRIVER: Frame owns the motion mode + form
+// + velocity *wishes*; the scene owns position, gravity, AABB
+// collision, and pickups, reading wants_velocity_x()/
+// wants_jump_impulse() each frame and reporting ground_contact()/
+// left_ground()/pickup_*() back — exactly like the Godot main.gd.
 
-    operations:
-        current_state(): string { @@:(@@:system.state) }
-        coins(): int { @@:(this.collected) }
+@@system Locomotion {
 
     interface:
-        start()
-        run()
-        halt()
-        jump()
-        step_off()
-        apex()
-        land()
-        coin()
-        goal()
-        pause()
-        resume()
-        restart()
+        tick(dt: float)
+
+        press_left()
+        press_right()
+        release_horizontal()
+        press_sprint()
+        release_sprint()
+        press_jump()
+        release_jump()
+
+        ground_contact()
+        left_ground()
+
+        get_state(): string
+        wants_velocity_x(): float
+        wants_jump_impulse(): bool
+        consume_jump_impulse()
+        facing(): int
+        is_grounded(): bool
+        is_in_air(): bool
 
     machine:
-        $Title {
-            start() { -> $Idle }
-        }
-
-        $OnGround {
-            jump() { -> $Jumping }
-            step_off() { -> $Falling }
-            coin() { this.collected = this.collected + 1 }
-            goal() { -> $Win }
-            pause() { push$ -> $Paused }
-        }
-
-        $Idle => $OnGround {
-            run() { -> $Running }
-            => $^
-        }
-
-        $Running => $OnGround {
-            halt() { -> $Idle }
-            => $^
-        }
-
-        $InAir {
-            coin() { this.collected = this.collected + 1 }
-            pause() { push$ -> $Paused }
-        }
-
-        $Jumping => $InAir {
-            apex() { -> $Falling }
-            => $^
-        }
-
-        $Falling => $InAir {
-            land() { -> $Idle }
-            => $^
-        }
-
-        $Paused {
-            resume() { -> pop$ }
-        }
-
-        $Win {
-            restart() {
-                this.collected = 0
-                -> $Title
+        $Idle {
+            press_left() {
+                this.input_x = -1
+                -> $Walking
             }
+            press_right() {
+                this.input_x = 1
+                -> $Walking
+            }
+            press_jump() {
+                this.pending_jump = true
+                -> $Jumping
+            }
+            left_ground() {
+                -> $Falling
+            }
+
+            get_state(): string         { @@:("idle") }
+            wants_velocity_x(): float    { @@:(0.0) }
+            wants_jump_impulse(): bool   { @@:(this.pending_jump) }
+            consume_jump_impulse()       { this.pending_jump = false }
+            facing(): int                { @@:(this.face) }
+            is_grounded(): bool          { @@:(true) }
+            is_in_air(): bool            { @@:(false) }
+        }
+
+        $Walking {
+            press_left() {
+                this.input_x = -1
+                this.face = -1
+            }
+            press_right() {
+                this.input_x = 1
+                this.face = 1
+            }
+            release_horizontal() {
+                this.input_x = 0
+                -> $Idle
+            }
+            press_sprint() {
+                -> $Running
+            }
+            press_jump() {
+                this.pending_jump = true
+                -> $Jumping
+            }
+            left_ground() {
+                -> $Falling
+            }
+
+            get_state(): string         { @@:("walking") }
+            wants_velocity_x(): float    { @@:(this.input_x * this.walk_speed) }
+            wants_jump_impulse(): bool   { @@:(this.pending_jump) }
+            consume_jump_impulse()       { this.pending_jump = false }
+            facing(): int                { @@:(this.face) }
+            is_grounded(): bool          { @@:(true) }
+            is_in_air(): bool            { @@:(false) }
+        }
+
+        $Running {
+            press_left() {
+                this.input_x = -1
+                this.face = -1
+            }
+            press_right() {
+                this.input_x = 1
+                this.face = 1
+            }
+            release_horizontal() {
+                this.input_x = 0
+                -> $Walking
+            }
+            release_sprint() {
+                -> $Walking
+            }
+            press_jump() {
+                this.pending_jump = true
+                -> $Jumping
+            }
+            left_ground() {
+                -> $Falling
+            }
+
+            get_state(): string         { @@:("running") }
+            wants_velocity_x(): float    { @@:(this.input_x * this.run_speed) }
+            wants_jump_impulse(): bool   { @@:(this.pending_jump) }
+            consume_jump_impulse()       { this.pending_jump = false }
+            facing(): int                { @@:(this.face) }
+            is_grounded(): bool          { @@:(true) }
+            is_in_air(): bool            { @@:(false) }
+        }
+
+        $Jumping {
+            $.jump_held_time: float = 0.0
+            $.jump_released: bool = false
+
+            tick(dt: float) {
+                if (!$.jump_released) {
+                    $.jump_held_time = $.jump_held_time + dt
+                }
+                if ($.jump_held_time >= 0.35) {
+                    -> $Falling
+                }
+            }
+
+            press_left() {
+                this.input_x = -1
+                this.face = -1
+            }
+            press_right() {
+                this.input_x = 1
+                this.face = 1
+            }
+            release_horizontal() {
+                this.input_x = 0
+            }
+            release_jump() {
+                $.jump_released = true
+            }
+            ground_contact() {
+                -> $Landing
+            }
+
+            get_state(): string         { @@:("jumping") }
+            wants_velocity_x(): float    { @@:(this.input_x * this.air_speed) }
+            wants_jump_impulse(): bool   { @@:(this.pending_jump) }
+            consume_jump_impulse()       { this.pending_jump = false }
+            facing(): int                { @@:(this.face) }
+            is_grounded(): bool          { @@:(false) }
+            is_in_air(): bool            { @@:(true) }
+        }
+
+        $Falling {
+            press_left() {
+                this.input_x = -1
+                this.face = -1
+            }
+            press_right() {
+                this.input_x = 1
+                this.face = 1
+            }
+            release_horizontal() {
+                this.input_x = 0
+            }
+            ground_contact() {
+                -> $Landing
+            }
+
+            get_state(): string         { @@:("falling") }
+            wants_velocity_x(): float    { @@:(this.input_x * this.air_speed) }
+            wants_jump_impulse(): bool   { @@:(false) }
+            consume_jump_impulse()       { this.pending_jump = false }
+            facing(): int                { @@:(this.face) }
+            is_grounded(): bool          { @@:(false) }
+            is_in_air(): bool            { @@:(true) }
+        }
+
+        $Landing {
+            $.timer: float = 0.0
+            $.duration: float = 0.08
+
+            $>() {
+                this.pending_jump = false
+            }
+
+            tick(dt: float) {
+                $.timer = $.timer + dt
+                if ($.timer >= $.duration) {
+                    if (this.input_x != 0) {
+                        -> $Walking
+                    } else {
+                        -> $Idle
+                    }
+                }
+            }
+
+            press_left() {
+                this.input_x = -1
+                this.face = -1
+            }
+            press_right() {
+                this.input_x = 1
+                this.face = 1
+            }
+            release_horizontal() {
+                this.input_x = 0
+            }
+            press_jump() {
+                this.pending_jump = true
+                -> $Jumping
+            }
+            left_ground() {
+                -> $Falling
+            }
+
+            get_state(): string         { @@:("landing") }
+            wants_velocity_x(): float    { @@:(this.input_x * this.walk_speed * 0.6) }
+            wants_jump_impulse(): bool   { @@:(this.pending_jump) }
+            consume_jump_impulse()       { this.pending_jump = false }
+            facing(): int                { @@:(this.face) }
+            is_grounded(): bool          { @@:(true) }
+            is_in_air(): bool            { @@:(false) }
         }
 
     domain:
-        collected: int = 0
+        input_x: int = 0
+        face: int = 1
+        pending_jump: bool = false
+        walk_speed: float = 140.0
+        run_speed: float = 260.0
+        air_speed: float = 180.0
+}
+
+@@system PowerUp {
+
+    interface:
+        pickup_mushroom()
+        pickup_flower()
+        take_damage(): bool
+        reset()
+        get_form(): string
+        hit_box_height(): int
+        can_shoot(): bool
+
+    machine:
+        $Small {
+            pickup_mushroom() {
+                -> $Big
+            }
+            pickup_flower() {
+                -> $Fiery
+            }
+            take_damage(): bool {
+                @@:(false)
+            }
+            reset() {
+            }
+
+            get_form(): string      { @@:("small") }
+            hit_box_height(): int   { @@:(24) }
+            can_shoot(): bool       { @@:(false) }
+        }
+
+        $Big {
+            pickup_mushroom() {
+            }
+            pickup_flower() {
+                -> $Fiery
+            }
+            take_damage(): bool {
+                @@:(true)
+                -> $Small
+            }
+            reset() {
+                -> $Small
+            }
+
+            get_form(): string      { @@:("big") }
+            hit_box_height(): int   { @@:(48) }
+            can_shoot(): bool       { @@:(false) }
+        }
+
+        $Fiery {
+            pickup_mushroom() {
+            }
+            pickup_flower() {
+            }
+            take_damage(): bool {
+                @@:(true)
+                -> $Big
+            }
+            reset() {
+                -> $Small
+            }
+
+            get_form(): string      { @@:("fiery") }
+            hit_box_height(): int   { @@:(48) }
+            can_shoot(): bool       { @@:(true) }
+        }
+}
+
+@@[main]
+@@system Platformer {
+
+    operations:
+        current_state(): string { @@:(@@:system.state) }
+
+    interface:
+        tick(dt: float)
+
+        press_left()
+        press_right()
+        release_horizontal()
+        press_sprint()
+        release_sprint()
+        press_jump()
+        release_jump()
+
+        ground_contact()
+        left_ground()
+
+        pickup_mushroom()
+        pickup_flower()
+        take_damage(): bool
+
+        pause()
+        resume()
+        is_paused(): bool
+
+        locomotion_state(): string
+        form(): string
+        wants_velocity_x(): float
+        wants_jump_impulse(): bool
+        consume_jump_impulse()
+        facing(): int
+        is_grounded(): bool
+        is_in_air(): bool
+        hit_box_height(): int
+        can_shoot(): bool
+
+    machine:
+        $Playing {
+            tick(dt: float) {
+                this.loco.tick(dt)
+            }
+
+            press_left()            { this.loco.press_left() }
+            press_right()           { this.loco.press_right() }
+            release_horizontal()    { this.loco.release_horizontal() }
+            press_sprint()          { this.loco.press_sprint() }
+            release_sprint()        { this.loco.release_sprint() }
+            press_jump()            { this.loco.press_jump() }
+            release_jump()          { this.loco.release_jump() }
+            ground_contact()        { this.loco.ground_contact() }
+            left_ground()           { this.loco.left_ground() }
+
+            pickup_mushroom()       { this.power.pickup_mushroom() }
+            pickup_flower()         { this.power.pickup_flower() }
+
+            take_damage(): bool {
+                @@:(this.power.take_damage())
+            }
+
+            pause() {
+                push$ -> $Paused
+            }
+
+            locomotion_state(): string  { @@:(this.loco.get_state()) }
+            form(): string              { @@:(this.power.get_form()) }
+            wants_velocity_x(): float   { @@:(this.loco.wants_velocity_x()) }
+            wants_jump_impulse(): bool  { @@:(this.loco.wants_jump_impulse()) }
+            consume_jump_impulse()      { this.loco.consume_jump_impulse() }
+            facing(): int               { @@:(this.loco.facing()) }
+            is_grounded(): bool         { @@:(this.loco.is_grounded()) }
+            is_in_air(): bool           { @@:(this.loco.is_in_air()) }
+            hit_box_height(): int       { @@:(this.power.hit_box_height()) }
+            can_shoot(): bool           { @@:(this.power.can_shoot()) }
+            is_paused(): bool           { @@:(false) }
+        }
+
+        $Paused {
+            resume() {
+                -> pop$
+            }
+
+            locomotion_state(): string  { @@:(this.loco.get_state()) }
+            form(): string              { @@:(this.power.get_form()) }
+            wants_velocity_x(): float   { @@:(this.loco.wants_velocity_x()) }
+            wants_jump_impulse(): bool  { @@:(this.loco.wants_jump_impulse()) }
+            facing(): int               { @@:(this.loco.facing()) }
+            is_grounded(): bool         { @@:(this.loco.is_grounded()) }
+            is_in_air(): bool           { @@:(this.loco.is_in_air()) }
+            hit_box_height(): int       { @@:(this.power.hit_box_height()) }
+            can_shoot(): bool           { @@:(this.power.can_shoot()) }
+            is_paused(): bool           { @@:(true) }
+        }
+
+    domain:
+        loco = @@Locomotion()
+        power = @@PowerUp()
 }

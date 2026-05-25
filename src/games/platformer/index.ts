@@ -1,14 +1,15 @@
-import { PlatformerGame } from "./platformer.machine.js";
+import { Platformer } from "./platformer.machine.js";
 import dot from "./platformer.dot?raw";
 import { PlatformerScene } from "./PlatformerScene";
 import type { GameDef } from "../types";
 
 export const platformer: GameDef = {
   id: "platformer",
-  title: "Platformer",
-  teaches: "Locomotion as two HSM clusters · $OnGround{Idle,Running} / $InAir{Jumping,Falling}",
-  controls: "A/D move · W/↑ jump · grab coins · reach the flag · SPACE start/restart",
+  title: "Platformer (Locomotion + PowerUp)",
+  teaches:
+    "Orthogonal-state composition vs matrix HSM · two independent sub-FSMs (motion + form) under one orchestrator · push$/pop$ pause",
+  controls: "Arrows/WASD move · Shift run · Space jump · grab the mushroom/flower · P pause · R reset pickups",
   dot,
-  createMachine: () => PlatformerGame._create(),
+  createMachine: () => Platformer._create(),
   Scene: PlatformerScene,
 };
