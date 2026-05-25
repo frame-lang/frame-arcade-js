@@ -1,32 +1,57 @@
 import Phaser from "phaser";
-// Generated from pong.frm by `npm run gen` (framec -l javascript / -l graphviz).
-import { PongGame } from "./games/pong/pong.machine.js";
-import dot from "./games/pong/pong.dot?raw";
+import { GAMES } from "./games";
+import type { GameDef } from "./games/types";
 import { StateChart } from "./visualizer";
-import { PongScene, type PongMachine, GAME_W, GAME_H } from "./games/pong/PongScene";
 
-async function main(): Promise<void> {
-  const machine = PongGame._create() as PongMachine;
+const menuEl = document.getElementById("menu")!;
+const vizEl = document.getElementById("viz")!;
+const teachesEl = document.getElementById("teaches")!;
+const controlsEl = document.getElementById("controls")!;
 
-  // The state chart, rendered from the same .frm spec, highlights the live state.
-  const chart = new StateChart(document.getElementById("viz")!, dot);
+let game: Phaser.Game | null = null;
+let raf = 0;
+
+function renderMenu(activeId: string): void {
+  menuEl.replaceChildren(
+    ...GAMES.map((g) => {
+      const b = document.createElement("button");
+      b.textContent = g.title;
+      b.className = "tab" + (g.id === activeId ? " active" : "");
+      b.onclick = () => void load(g);
+      return b;
+    }),
+  );
+}
+
+async function load(def: GameDef): Promise<void> {
+  if (game) { game.destroy(true); game = null; }
+  cancelAnimationFrame(raf);
+
+  const machine = def.createMachine();
+
+  const chart = new StateChart(vizEl, def.dot);
   await chart.render();
 
-  new Phaser.Game({
+  game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "game",
-    width: GAME_W,
-    height: GAME_H,
+    width: def.width ?? 720,
+    height: def.height ?? 480,
     backgroundColor: "#0b0e14",
-    scene: new PongScene(machine),
+    scene: new def.Scene(machine),
   });
 
-  // Drive the visualizer straight from the machine: one read per frame.
+  teachesEl.textContent = def.teaches;
+  controlsEl.textContent = def.controls;
+  renderMenu(def.id);
+  if (location.hash.slice(1) !== def.id) location.hash = def.id;
+
   const tick = (): void => {
     chart.highlight(machine.current_state());
-    requestAnimationFrame(tick);
+    raf = requestAnimationFrame(tick);
   };
   tick();
 }
 
-void main();
+const initial = GAMES.find((g) => g.id === location.hash.slice(1)) ?? GAMES[0];
+void load(initial);

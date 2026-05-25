@@ -1,8 +1,5 @@
 /// <reference types="vite/client" />
 
-// framec-generated ES module: the system class with a static factory.
-declare module "*/pong.machine.js" {
-  export const PongGame: {
-    _create(): import("./games/pong/PongScene").PongMachine;
-  };
-}
+// framec-generated ES modules have no .d.ts; treat their exports as `any`.
+// Each game casts the machine to its own interface where it needs one.
+declare module "*.machine.js";
