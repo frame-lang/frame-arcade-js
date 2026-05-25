@@ -1,19 +1,42 @@
 import Phaser from "phaser";
 
+/**
+ * Public surface of the canonical Asteroids machine (mirrors the Godot
+ * reference, ch04-asteroids). The machine owns the Ship modes and the
+ * AsteroidField (positions/velocities/splitting); this scene is a thin
+ * driver like Godot main.gd — it owns only the ship's transform + bullets,
+ * ticks the machine with the court size, renders asteroids from m.field,
+ * and reports collisions (ship_hit_asteroid / bullet_hit_asteroid) and
+ * hyperspace.
+ */
+interface ShipSub {
+  get_state(): string;
+  is_visible(): boolean;
+  can_fire(): boolean;
+}
+interface FieldSub {
+  count(): number;
+  is_alive(index: number): boolean;
+  position(index: number): { x: number; y: number };
+  radius_of(index: number): number;
+}
 export interface AsteroidsMachine {
   start(): void;
-  hyperspace(): void;
-  arrive(): void;
-  rock_destroyed(): void;
-  hit(): void;
-  next(): void;
+  restart(): void;
   pause(): void;
   resume(): void;
-  restart(): void;
+  tick(dt: number, court_size: { x: number; y: number }): void;
+  ship_hit_asteroid(index: number): void;
+  bullet_hit_asteroid(index: number): void;
+  ship_hyperspace(): void;
   current_state(): string;
-  score(): number;
-  lives(): number;
-  rocks(): number;
+  get_state(): string;
+  get_score(): number;
+  get_lives(): number;
+  get_wave(): number;
+  is_paused(): boolean;
+  ship: ShipSub;
+  field: FieldSub;
 }
 
 const W = 720;
@@ -22,24 +45,21 @@ const THRUST = 260;
 const TURN = 4.2;
 const FRICTION = 0.6;
 const BULLET = 460;
-
-interface Rock { obj: Phaser.GameObjects.Arc; vx: number; vy: number; }
+const COURT = { x: W, y: H };
 
 export class AsteroidsScene extends Phaser.Scene {
   private m: AsteroidsMachine;
   private ship!: Phaser.GameObjects.Triangle;
-  private rocks: Rock[] = [];
+  private rocks: Phaser.GameObjects.Arc[] = [];     // pool synced to m.field
   private shots: Phaser.GameObjects.Arc[] = [];
   private svx = 0;
   private svy = 0;
   private fireCool = 0;
-  private hyperTimer = 0;
-  private invuln = 0;
+  private prevShip = "";
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private scoreText!: Phaser.GameObjects.Text;
   private stateText!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
-  private prev = "";
 
   constructor(machine: AsteroidsMachine) {
     super("Asteroids");
@@ -59,70 +79,68 @@ export class AsteroidsScene extends Phaser.Scene {
   }
 
   private onSpace(): void {
-    const s = this.m.current_state();
-    if (s === "Title") { this.m.start(); this.spawnField(); }
-    else if (s === "Cleared") this.m.next();
-    else if (s === "GameOver") { this.m.restart(); }
-    else if (s === "Flying" && this.fireCool <= 0) {
+    const s = this.m.get_state();
+    if (s === "attract") { this.m.start(); this.resetShip(); }
+    else if (s === "game_over") this.m.restart();
+    else if (s === "playing" && this.m.ship.can_fire() && this.fireCool <= 0) {
       this.fireCool = 0.22;
       const b = this.add.circle(this.ship.x, this.ship.y, 3, 0xffffff);
-      (b as any).vx = Math.sin(this.ship.rotation) * BULLET + this.svx;
-      (b as any).vy = -Math.cos(this.ship.rotation) * BULLET + this.svy;
+      (b as unknown as { vx: number }).vx = Math.sin(this.ship.rotation) * BULLET + this.svx;
+      (b as unknown as { vy: number }).vy = -Math.cos(this.ship.rotation) * BULLET + this.svy;
       this.shots.push(b);
     }
   }
+
   private onHyper(): void {
-    if (this.m.current_state() === "Flying") {
-      this.m.hyperspace();
+    if (this.m.get_state() === "playing") {
+      this.m.ship_hyperspace();
       this.ship.setPosition(Phaser.Math.Between(40, W - 40), Phaser.Math.Between(40, H - 40));
-      this.svx = 0; this.svy = 0;
-      this.hyperTimer = 0.6;
-      this.invuln = 1.2;
+      this.svx = 0;
+      this.svy = 0;
     }
-  }
-  private onPause(): void {
-    const s = this.m.current_state();
-    if (s === "Flying" || s === "Cleared") this.m.pause();
-    else if (s === "Paused") this.m.resume();
   }
 
-  private spawnField(): void {
-    this.rocks.forEach((r) => r.obj.destroy());
-    this.rocks = [];
-    for (let i = 0; i < this.m.rocks(); i++) {
-      const x = Phaser.Math.Between(0, W), y = Phaser.Math.Between(0, H);
-      if (Phaser.Math.Distance.Between(x, y, W / 2, H / 2) < 90) { i--; continue; }
-      const obj = this.add.circle(x, y, Phaser.Math.Between(14, 24), 0x9aa4b8, 0).setStrokeStyle(2, 0x9aa4b8);
-      this.rocks.push({ obj, vx: Phaser.Math.FloatBetween(-60, 60), vy: Phaser.Math.FloatBetween(-60, 60) });
-    }
+  private onPause(): void {
+    if (this.m.is_paused()) this.m.resume();
+    else if (this.m.get_state() === "playing" || this.m.get_state() === "ship_dying") this.m.pause();
+  }
+
+  private resetShip(): void {
     this.ship.setPosition(W / 2, H / 2);
-    this.svx = 0; this.svy = 0;
+    this.ship.rotation = 0;
+    this.svx = 0;
+    this.svy = 0;
+    this.shots.forEach((b) => b.destroy());
+    this.shots = [];
   }
 
   update(_t: number, deltaMs: number): void {
-    const dt = Math.min(deltaMs / 1000, 0.033);
-    const s = this.m.current_state();
-    this.fireCool -= dt;
-    if (this.invuln > 0) this.invuln -= dt;
+    const dt = deltaMs / 1000;
+    const s = this.m.get_state();
+    this.fireCool = Math.max(0, this.fireCool - dt);
 
-    if (s === "Hyperspace") {
-      this.hyperTimer -= dt;
-      this.ship.setAlpha(0.3);
-      if (this.hyperTimer <= 0) this.m.arrive();
-    } else {
-      this.ship.setAlpha(this.invuln > 0 ? 0.5 : 1);
+    if (!this.m.is_paused() && s !== "attract" && s !== "game_over") {
+      this.m.tick(dt, COURT);
+      const st = this.m.get_state();
+      // Reset the ship transform the moment it returns to play after dying.
+      if (this.m.ship.get_state() === "respawning" && this.prevShip !== "respawning") this.resetShip();
+      this.prevShip = this.m.ship.get_state();
+
+      if (st === "playing") {
+        this.flyShip(dt);
+        this.updateBullets(dt);
+        this.checkCollisions();
+      }
     }
 
-    if (s === "Flying") this.stepFlying(dt);
-    if (s === "Flying" || s === "Hyperspace") this.driftRocks(dt);
-
-    this.scoreText.setText(`score ${this.m.score()}   ships ${this.m.lives()}   rocks ${this.m.rocks()}`);
+    this.renderRocks(s);
+    this.ship.setVisible(s !== "attract" && s !== "game_over" && this.m.ship.is_visible());
+    this.scoreText.setText(`score ${this.m.get_score()}   ships ${this.m.get_lives()}   wave ${this.m.get_wave()}`);
     this.stateText.setText(`state: ${s}`);
     this.hintText.setText(this.hint(s));
-    this.prev = s;
   }
 
-  private stepFlying(dt: number): void {
+  private flyShip(dt: number): void {
     if (this.keys.LEFT.isDown) this.ship.rotation -= TURN * dt;
     if (this.keys.RIGHT.isDown) this.ship.rotation += TURN * dt;
     if (this.keys.UP.isDown) {
@@ -133,52 +151,70 @@ export class AsteroidsScene extends Phaser.Scene {
     this.svy *= 1 - FRICTION * dt;
     this.ship.x = Phaser.Math.Wrap(this.ship.x + this.svx * dt, 0, W);
     this.ship.y = Phaser.Math.Wrap(this.ship.y + this.svy * dt, 0, H);
+  }
 
+  private updateBullets(dt: number): void {
     for (let i = this.shots.length - 1; i >= 0; i--) {
-      const b = this.shots[i] as any;
+      const b = this.shots[i] as unknown as Phaser.GameObjects.Arc & { vx: number; vy: number; life?: number };
       b.x = Phaser.Math.Wrap(b.x + b.vx * dt, 0, W);
       b.y = Phaser.Math.Wrap(b.y + b.vy * dt, 0, H);
-      b.life = (b.life ?? 1.2) - dt;
-      let hitRock = false;
-      for (let j = this.rocks.length - 1; j >= 0; j--) {
-        if (Phaser.Math.Distance.Between(b.x, b.y, this.rocks[j].obj.x, this.rocks[j].obj.y) < this.rocks[j].obj.radius) {
-          this.rocks[j].obj.destroy(); this.rocks.splice(j, 1);
-          this.m.rock_destroyed();
-          hitRock = true;
+      b.life = (b.life ?? 0) + dt;
+      if (b.life > 1.1) { b.destroy(); this.shots.splice(i, 1); }
+    }
+  }
+
+  private checkCollisions(): void {
+    const n = this.m.field.count();
+    // bullets vs asteroids
+    for (let bi = this.shots.length - 1; bi >= 0; bi--) {
+      const b = this.shots[bi];
+      for (let i = 0; i < n; i++) {
+        if (!this.m.field.is_alive(i)) continue;
+        const p = this.m.field.position(i);
+        if (Phaser.Math.Distance.Between(b.x, b.y, p.x, p.y) < this.m.field.radius_of(i)) {
+          this.m.bullet_hit_asteroid(i);
+          b.destroy();
+          this.shots.splice(bi, 1);
           break;
         }
       }
-      if (hitRock || b.life <= 0) { b.destroy(); this.shots.splice(i, 1); }
     }
-
-    if (this.invuln <= 0) {
-      for (const r of this.rocks) {
-        if (Phaser.Math.Distance.Between(this.ship.x, this.ship.y, r.obj.x, r.obj.y) < r.obj.radius + 8) {
-          this.m.hit();
-          this.ship.setPosition(W / 2, H / 2);
-          this.svx = 0; this.svy = 0;
-          this.invuln = 1.5;
-          break;
-        }
+    // ship vs asteroids (the machine ignores the hit if the ship can't be hit)
+    for (let i = 0; i < n; i++) {
+      if (!this.m.field.is_alive(i)) continue;
+      const p = this.m.field.position(i);
+      if (Phaser.Math.Distance.Between(this.ship.x, this.ship.y, p.x, p.y) < this.m.field.radius_of(i) + 8) {
+        this.m.ship_hit_asteroid(i);
+        break;
       }
     }
   }
 
-  private driftRocks(dt: number): void {
-    for (const r of this.rocks) {
-      r.obj.x = Phaser.Math.Wrap(r.obj.x + r.vx * dt, 0, W);
-      r.obj.y = Phaser.Math.Wrap(r.obj.y + r.vy * dt, 0, H);
+  // Sync the Arc pool to the machine's field and draw each alive asteroid.
+  private renderRocks(s: string): void {
+    const showField = s === "playing" || s === "ship_dying" || s === "wave_clear" || s === "paused";
+    const n = this.m.field.count();
+    while (this.rocks.length < n) {
+      this.rocks.push(this.add.circle(0, 0, 10, 0x9aa4b8, 0).setStrokeStyle(2, 0x9aa4b8));
+    }
+    for (let i = 0; i < this.rocks.length; i++) {
+      const alive = showField && i < n && this.m.field.is_alive(i);
+      this.rocks[i].setVisible(alive);
+      if (alive) {
+        const p = this.m.field.position(i);
+        this.rocks[i].setPosition(p.x, p.y).setRadius(this.m.field.radius_of(i));
+      }
     }
   }
 
   private hint(s: string): string {
     switch (s) {
-      case "Title": return "SPACE to start";
-      case "Flying": return "←/→ turn · ↑ thrust · SPACE fire · H hyperspace · P pause";
-      case "Hyperspace": return "...jumping through hyperspace...";
-      case "Cleared": return "Field cleared! · SPACE for next";
-      case "Paused": return "P to resume";
-      case "GameOver": return "Game over · SPACE to restart";
+      case "attract": return "SPACE to start";
+      case "playing": return "←/→ turn  ·  ↑ thrust  ·  SPACE fire  ·  H hyperspace  ·  P pause";
+      case "ship_dying": return "";
+      case "wave_clear": return "Wave clear!";
+      case "paused": return "P to resume";
+      case "game_over": return "Game over  ·  SPACE to restart";
       default: return "";
     }
   }

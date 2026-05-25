@@ -1,78 +1,455 @@
 @@[target("javascript")]
 
-// Asteroids — state stack (push$ / pop$) for hyperspace.
-// hyperspace pushes the current $Flying compartment and jumps to $Hyperspace;
-// arrive pops straight back to the saved compartment. pause/resume use the same
-// stack, so you return to exactly where you were.
-@@system AsteroidsGame {
+// Asteroids — three composed state machines.
+//
+// CANONICAL: mirrors the Godot reference
+// (frame-arcade/ch04-asteroids/frame/asteroids.fgd) exactly — same
+// three systems (Ship / AsteroidField / Asteroids), states,
+// transitions, the $InGame HSM parent, the Ship hyperspace
+// push$/pop$ subroutine, the game push$/pop$ pause, the
+// `difficulty` system parameter, and the owned sub-systems. Only
+// action bodies differ (JS): Vector2 becomes a plain {x, y}
+// object, randf()/cos/sin become Math.*, court_size is {x, y}.
+
+@@system Ship {
+
+    interface:
+        tick(dt: float)
+        hit()
+        hyperspace()
+        respawn()
+        can_fire(): bool
+        can_be_hit(): bool
+        is_visible(): bool
+        is_alive(): bool
+        get_state(): string
+        get_lives(): int
+
+    machine:
+        $Alive {
+            hit() { -> $Exploding }
+
+            hyperspace() {
+                push$
+                -> $InHyperspace
+            }
+
+            can_fire(): bool    { @@:(true) }
+            can_be_hit(): bool  { @@:(true) }
+            is_visible(): bool  { @@:(true) }
+            is_alive(): bool    { @@:(true) }
+            get_state(): string { @@:("alive") }
+            get_lives(): int    { @@:(this.lives_remaining) }
+        }
+
+        $InHyperspace {
+            $.timer: float = 0.0
+            $.duration: float = 0.4
+
+            tick(dt: float) {
+                $.timer = $.timer + dt
+                if ($.timer >= $.duration) {
+                    -> pop$
+                }
+            }
+
+            can_fire(): bool    { @@:(false) }
+            can_be_hit(): bool  { @@:(false) }
+            is_visible(): bool  { @@:(false) }
+            is_alive(): bool    { @@:(true) }
+            get_state(): string { @@:("hyperspace") }
+            get_lives(): int    { @@:(this.lives_remaining) }
+        }
+
+        $Exploding {
+            $.timer: float = 0.0
+            $.duration: float = 1.0
+
+            tick(dt: float) {
+                $.timer = $.timer + dt
+                if ($.timer >= $.duration) {
+                    this.lives_remaining = this.lives_remaining - 1
+                    if (this.lives_remaining <= 0) {
+                        -> $Dead
+                    } else {
+                        -> $Respawning
+                    }
+                }
+            }
+
+            can_fire(): bool    { @@:(false) }
+            can_be_hit(): bool  { @@:(false) }
+            is_visible(): bool  { @@:(true) }
+            is_alive(): bool    { @@:(false) }
+            get_state(): string { @@:("exploding") }
+            get_lives(): int    { @@:(this.lives_remaining) }
+        }
+
+        $Respawning {
+            $.timer: float = 0.0
+            $.duration: float = 2.0
+
+            tick(dt: float) {
+                $.timer = $.timer + dt
+                if ($.timer >= $.duration) {
+                    -> $Alive
+                }
+            }
+
+            can_fire(): bool    { @@:(true) }
+            can_be_hit(): bool  { @@:(false) }
+            is_visible(): bool  { @@:(true) }
+            is_alive(): bool    { @@:(true) }
+            get_state(): string { @@:("respawning") }
+            get_lives(): int    { @@:(this.lives_remaining) }
+        }
+
+        $Dead {
+            respawn() {
+                this.lives_remaining = this.starting_lives
+                -> $Alive
+            }
+
+            can_fire(): bool    { @@:(false) }
+            can_be_hit(): bool  { @@:(false) }
+            is_visible(): bool  { @@:(false) }
+            is_alive(): bool    { @@:(false) }
+            get_state(): string { @@:("dead") }
+            get_lives(): int    { @@:(0) }
+        }
+
+    domain:
+        lives_remaining: int = 3
+        starting_lives: int = 3
+}
+
+@@system AsteroidField {
+
+    interface:
+        spawn_wave(count: int, court_size: Vector2)
+        split(index: int): bool
+        remove(index: int)
+        clear()
+        advance(dt: float, court_size: Vector2)
+        count(): int
+        alive_count(): int
+        is_alive(index: int): bool
+        position(index: int): Vector2
+        velocity(index: int): Vector2
+        size_of(index: int): int
+        radius_of(index: int): float
+
+    machine:
+        $Active {
+            spawn_wave(count: int, court_size: Vector2) {
+                this._clear()
+                let i = 0
+                while (i < count) {
+                    this._spawn_large(court_size)
+                    i = i + 1
+                }
+            }
+
+            split(index: int): bool {
+                if (index < 0 || index >= this.asteroids.length) {
+                    @@:return(false)
+                }
+                let a = this.asteroids[index]
+                if (!a.alive) {
+                    @@:return(false)
+                }
+                a.alive = false
+                let sz = a.size
+                if (sz > 1) {
+                    this._spawn_child(a.pos, sz - 1)
+                    this._spawn_child(a.pos, sz - 1)
+                }
+                @@:(true)
+            }
+
+            remove(index: int) {
+                if (index < 0 || index >= this.asteroids.length) {
+                    return
+                }
+                this.asteroids[index].alive = false
+            }
+
+            clear() {
+                this._clear()
+            }
+
+            advance(dt: float, court_size: Vector2) {
+                let i = 0
+                while (i < this.asteroids.length) {
+                    let a = this.asteroids[i]
+                    if (a.alive) {
+                        a.pos.x = a.pos.x + a.vel.x * dt
+                        a.pos.y = a.pos.y + a.vel.y * dt
+                        if (a.pos.x < 0.0) { a.pos.x = a.pos.x + court_size.x }
+                        if (a.pos.x > court_size.x) { a.pos.x = a.pos.x - court_size.x }
+                        if (a.pos.y < 0.0) { a.pos.y = a.pos.y + court_size.y }
+                        if (a.pos.y > court_size.y) { a.pos.y = a.pos.y - court_size.y }
+                    }
+                    i = i + 1
+                }
+            }
+
+            count(): int { @@:(this.asteroids.length) }
+
+            alive_count(): int {
+                let c = 0
+                let i = 0
+                while (i < this.asteroids.length) {
+                    if (this.asteroids[i].alive) {
+                        c = c + 1
+                    }
+                    i = i + 1
+                }
+                @@:(c)
+            }
+
+            is_alive(index: int): bool {
+                if (index < 0 || index >= this.asteroids.length) {
+                    @@:return(false)
+                }
+                @@:(this.asteroids[index].alive)
+            }
+
+            position(index: int): Vector2 {
+                if (index < 0 || index >= this.asteroids.length) {
+                    @@:return({ x: 0.0, y: 0.0 })
+                }
+                @@:(this.asteroids[index].pos)
+            }
+
+            velocity(index: int): Vector2 {
+                if (index < 0 || index >= this.asteroids.length) {
+                    @@:return({ x: 0.0, y: 0.0 })
+                }
+                @@:(this.asteroids[index].vel)
+            }
+
+            size_of(index: int): int {
+                if (index < 0 || index >= this.asteroids.length) {
+                    @@:return(0)
+                }
+                @@:(this.asteroids[index].size)
+            }
+
+            radius_of(index: int): float {
+                if (index < 0 || index >= this.asteroids.length) {
+                    @@:return(0.0)
+                }
+                let sz = this.asteroids[index].size
+                if (sz == 3) { @@:return(32.0) }
+                if (sz == 2) { @@:return(18.0) }
+                @@:(10.0)
+            }
+        }
+
+    actions:
+        _clear() {
+            this.asteroids = []
+        }
+
+        _spawn_large(court_size: Vector2) {
+            let edge = Math.floor(Math.random() * 4)
+            let pos = { x: 0.0, y: 0.0 }
+            if (edge == 0) {
+                pos = { x: 0.0, y: Math.random() * court_size.y }
+            } else if (edge == 1) {
+                pos = { x: court_size.x, y: Math.random() * court_size.y }
+            } else if (edge == 2) {
+                pos = { x: Math.random() * court_size.x, y: 0.0 }
+            } else {
+                pos = { x: Math.random() * court_size.x, y: court_size.y }
+            }
+            let angle = Math.random() * Math.PI * 2
+            let speed = 40.0 + Math.random() * 30.0
+            this.asteroids.push({ pos: pos, vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, size: 3, alive: true })
+        }
+
+        _spawn_child(pos: Vector2, size: int) {
+            let angle = Math.random() * Math.PI * 2
+            let speed = 60.0 + Math.random() * 40.0 + (3 - size) * 20.0
+            this.asteroids.push({ pos: { x: pos.x, y: pos.y }, vel: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed }, size: size, alive: true })
+        }
+
+    domain:
+        asteroids: list = []
+}
+
+@@[main]
+@@system Asteroids(difficulty: int = 2) {
 
     operations:
         current_state(): string { @@:(@@:system.state) }
-        score(): int { @@:(this.points) }
-        lives(): int { @@:(this.ships) }
-        rocks(): int { @@:(this.alive) }
 
     interface:
         start()
-        hyperspace()
-        arrive()
-        rock_destroyed()
-        hit()
-        next()
+        restart()
         pause()
         resume()
-        restart()
+        tick(dt: float, court_size: Vector2)
+        ship_hit_asteroid(index: int)
+        bullet_hit_asteroid(index: int)
+        ship_hyperspace()
+        get_state(): string
+        get_score(): int
+        get_lives(): int
+        get_wave(): int
+        get_difficulty(): int
+        is_paused(): bool
 
     machine:
-        $Title {
-            start() { -> $Flying }
+        $Attract {
+            $>() {
+                this.score = 0
+                this.wave = 1
+            }
+
+            start() {
+                this.ship.respawn()
+                this.field.spawn_wave(this._asteroids_for_wave(1), this.last_court_size)
+                -> $Playing
+            }
+
+            get_state(): string     { @@:("attract") }
+            get_score(): int        { @@:(this.score) }
+            get_lives(): int        { @@:(this.ship.get_lives()) }
+            get_wave(): int         { @@:(this.wave) }
+            get_difficulty(): int   { @@:(this.difficulty) }
+            is_paused(): bool       { @@:(false) }
         }
 
-        $Flying {
-            hyperspace() { push$ -> $Hyperspace }
-            rock_destroyed() {
-                this.points = this.points + 20
-                this.alive = this.alive - 1
-                if (this.alive <= 0) {
-                    -> $Cleared
+        $InGame {
+            pause() {
+                push$ -> $Paused
+            }
+
+            get_state(): string     { @@:("in_game") }
+            get_score(): int        { @@:(this.score) }
+            get_lives(): int        { @@:(this.ship.get_lives()) }
+            get_wave(): int         { @@:(this.wave) }
+            get_difficulty(): int   { @@:(this.difficulty) }
+            is_paused(): bool       { @@:(false) }
+        }
+
+        $Playing => $InGame {
+            tick(dt: float, court_size: Vector2) {
+                this.last_court_size = court_size
+                this.ship.tick(dt)
+                this.field.advance(dt, court_size)
+            }
+
+            ship_hit_asteroid(index: int) {
+                if (!this.ship.can_be_hit()) {
+                    return
+                }
+                this.ship.hit()
+                -> $ShipDying
+            }
+
+            bullet_hit_asteroid(index: int) {
+                if (this.field.split(index)) {
+                    let sz = this._size_points(index)
+                    this.score = this.score + sz * this.difficulty
+                    if (this.field.alive_count() <= 0) {
+                        -> $WaveClear
+                    }
                 }
             }
-            hit() {
-                this.ships = this.ships - 1
-                if (this.ships <= 0) {
+
+            ship_hyperspace() {
+                this.ship.hyperspace()
+            }
+
+            get_state(): string { @@:("playing") }
+            => $^
+        }
+
+        $ShipDying => $InGame {
+            tick(dt: float, court_size: Vector2) {
+                this.last_court_size = court_size
+                this.ship.tick(dt)
+                this.field.advance(dt, court_size)
+                if (this.ship.get_state() == "respawning") {
+                    -> $Playing
+                } else if (this.ship.get_state() == "dead") {
                     -> $GameOver
                 }
             }
-            pause() { push$ -> $Paused }
+
+            get_state(): string { @@:("ship_dying") }
+            => $^
         }
 
-        $Hyperspace {
-            arrive() { -> pop$ }
-        }
-
-        $Cleared {
-            next() {
-                this.alive = this.rockCount
-                -> $Flying
+        $WaveClear => $InGame {
+            $>() {
+                this.wave_timer = 0.0
             }
+
+            tick(dt: float, court_size: Vector2) {
+                this.last_court_size = court_size
+                this.ship.tick(dt)
+                this.wave_timer = this.wave_timer + dt
+                if (this.wave_timer >= this.wave_pause) {
+                    this.wave = this.wave + 1
+                    this.field.spawn_wave(this._asteroids_for_wave(this.wave), court_size)
+                    -> $Playing
+                }
+            }
+
+            get_state(): string { @@:("wave_clear") }
+            => $^
         }
 
         $Paused {
-            resume() { -> pop$ }
+            resume() {
+                -> pop$
+            }
+
+            get_state(): string     { @@:("paused") }
+            get_score(): int        { @@:(this.score) }
+            get_lives(): int        { @@:(this.ship.get_lives()) }
+            get_wave(): int         { @@:(this.wave) }
+            get_difficulty(): int   { @@:(this.difficulty) }
+            is_paused(): bool       { @@:(true) }
         }
 
         $GameOver {
             restart() {
-                this.points = 0
-                this.ships = 3
-                this.alive = this.rockCount
-                -> $Title
+                -> $Attract
             }
+
+            get_state(): string     { @@:("game_over") }
+            get_score(): int        { @@:(this.score) }
+            get_lives(): int        { @@:(this.ship.get_lives()) }
+            get_wave(): int         { @@:(this.wave) }
+            get_difficulty(): int   { @@:(this.difficulty) }
+            is_paused(): bool       { @@:(false) }
+        }
+
+    actions:
+        _asteroids_for_wave(wave: int) {
+            let base = 2 + this.difficulty
+            return base + wave - 1
+        }
+
+        _size_points(index: int) {
+            let sz = this.field.size_of(index)
+            if (sz == 3) { return 20 }
+            if (sz == 2) { return 50 }
+            return 100
         }
 
     domain:
-        points: int = 0
-        ships: int = 3
-        rockCount: int = 12
-        alive: int = 12
+        difficulty: int = difficulty
+        score: int = 0
+        wave: int = 1
+        wave_timer: float = 0.0
+        wave_pause: float = 2.0
+        last_court_size: Vector2 = { x: 640.0, y: 480.0 }
+        ship = @@Ship()
+        field = @@AsteroidField()
 }
