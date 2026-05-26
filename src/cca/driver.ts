@@ -211,10 +211,36 @@ export class CcaDriver {
       return;
     }
 
-    // Movement: a compass direction, or any verb the current room maps as an exit.
+    // Canon-order verb intercepts (driver-side special cases). enter-stream
+    // and bridge-cross must run BEFORE the direction check ("enter"/"over" are
+    // motion-ish); the rest run after. Each consumed intercept ends the turn.
+    if (this.iBridgeCross(verb)) return this.endTurn();
+    if (this.iEnterStream(verb, noun)) return this.endTurn();
+
     const room = this.a.player_room();
     const exits = ROOMS[room] ?? {};
-    if (DIRECTIONS.includes(verb) || verb in exits) {
+    if (DIRECTIONS.includes(verb)) {
+      this.handleMovement(verb);
+      return;
+    }
+
+    if (this.iBreakMirror(verb, noun)) return this.endTurn();
+    if (this.iDropBird(verb, noun)) return this.endTurn();
+    if (this.iAttackBird(verb, noun)) return this.endTurn();
+    if (this.iAttackBear(verb, noun)) return this.endTurn();
+    if (this.iTakeKnife(verb, noun)) return this.endTurn();
+    if (this.iTakeBear(verb, noun)) return this.endTurn();
+    if (this.iUnlockChain(verb, noun)) return this.endTurn();
+    if (this.iTakeScenery(verb, noun)) return this.endTurn();
+    if (this.iThrowAxe(verb, noun)) return this.endTurn();
+    this.iPloverEmerald(verb, noun); // side-effect; falls through to FSM PLOVER
+
+    if (this.iCalm(verb)) return this.endTurn();
+    if (this.iEat(verb, noun)) return this.endTurn();
+    if (this.iFeed(verb, noun)) return this.endTurn();
+
+    // Room-specific motion aliases (e.g. CLIMB/BARREN) the room defines as exits.
+    if (verb in exits) {
       this.handleMovement(verb);
       return;
     }
@@ -393,5 +419,192 @@ export class CcaDriver {
     if (p.carrying(ID.CHAIN)) items.push("  Golden chain");
     if (items.length === 0) return "You're not carrying anything.";
     return "You are currently holding the following:\n" + items.join("\n");
+  }
+
+  private endTurn(): void {
+    this.afterTurn();
+  }
+
+  // ---- canon verb intercepts (ported from driver.gd _intercept_*) ----
+
+  private iBreakMirror(verb: string, noun: string): boolean {
+    if (verb !== "break" || noun !== "mirror") return false;
+    if (this.a.endgame_state() === "in_repository") {
+      this.println("You strike the mirror a resounding blow, whereupon it shatters into a");
+      this.println("myriad tiny fragments.");
+      this.println("");
+      this.println("The resulting ruckus has awakened the dwarves. There are now several");
+      this.println("threatening little dwarves in the room with you! Most of them throw");
+      this.println("knives at you! All of them get you!");
+      this.a.player.die();
+      this.checkPlayerDeath();
+      return true;
+    }
+    this.println("It is beyond your power to do that.");
+    return true;
+  }
+
+  private iDropBird(verb: string, noun: string): boolean {
+    if (verb !== "drop" || noun !== "bird") return false;
+    if (!this.a.player.carrying(ID.BIRD)) {
+      this.println(this.a.do_command("release", "bird"));
+      return true;
+    }
+    if (this.a.player_room() === 19 && this.a.snake_state() === "blocking") {
+      this.a.bird.vanish();
+      this.a.player.drop(ID.BIRD);
+      this.println("The snake has now devoured your bird.");
+      return true;
+    }
+    this.println(this.a.do_command("release", "bird"));
+    return true;
+  }
+
+  private iAttackBird(verb: string, noun: string): boolean {
+    if (verb !== "attack" || noun !== "bird") return false;
+    this.println("Oh, leave the poor unhappy bird alone.");
+    return true;
+  }
+
+  private iAttackBear(verb: string, noun: string): boolean {
+    if (verb !== "attack" || noun !== "bear") return false;
+    const bs: string = this.a.bear_state();
+    if (bs === "hungry") this.println("With what? Your bare hands? Against *his* bear hands??");
+    else if (bs === "tame" || bs === "following") this.println("The bear is confused; he only wants to be your friend.");
+    else if (bs === "released") this.println("For crying out loud, the poor thing is already dead!");
+    else this.println("You can't be serious!");
+    return true;
+  }
+
+  private iTakeKnife(verb: string, noun: string): boolean {
+    if (verb !== "take" || noun !== "knife") return false;
+    this.println("The dwarves' knives vanish as they strike the walls of the cave.");
+    return true;
+  }
+
+  private iTakeBear(verb: string, noun: string): boolean {
+    if (verb !== "take" || noun !== "bear") return false;
+    const bs: string = this.a.bear_state();
+    if (bs === "hungry" || bs === "tame") this.println("The bear is still chained to the wall.");
+    else if (bs === "following") this.println("OK");
+    else this.println("You can't be serious!");
+    return true;
+  }
+
+  private iUnlockChain(verb: string, noun: string): boolean {
+    if (verb !== "unlock" || noun !== "chain") return false;
+    if (!this.a.player.carrying(ID.KEYS)) {
+      this.println("The chain is still locked.");
+      return true;
+    }
+    return false; // keys carried → fall through to the FSM
+  }
+
+  private iBridgeCross(verb: string): boolean {
+    if (!["over", "across", "cross", "ne", "sw"].includes(verb)) return false;
+    const here: number = this.a.player_room();
+    if (here !== 117 && here !== 122) return false;
+    if (this.a.troll_bridge_collapsed()) return false;
+    if (this.a.bear_state() !== "following") return false;
+    this.println(
+      "Just as you reach the other side, the bridge buckles beneath the weight of the bear, which was still following you around. You scrabble desperately for support, but as the bridge collapses you stumble back and fall into the chasm.",
+    );
+    this.a.collapse_troll_bridge();
+    this.a.player.die();
+    this.checkPlayerDeath();
+    return true;
+  }
+
+  private iEnterStream(verb: string, noun: string): boolean {
+    if (verb !== "enter") return false;
+    if (noun !== "stream" && noun !== "water") return false;
+    this.println("Your feet are now wet.");
+    return true;
+  }
+
+  private iTakeScenery(verb: string, noun: string): boolean {
+    if (verb !== "take") return false;
+    if (noun === "stalactite") {
+      this.println("It is too far up for you to reach.");
+      return true;
+    }
+    const scenery = ["tablet", "mirror", "figure", "shadow", "drawings", "drawing", "volcano", "geyser", "carpet", "moss", "message"];
+    if (scenery.includes(noun)) {
+      this.println("You can't be serious!");
+      return true;
+    }
+    return false;
+  }
+
+  private iThrowAxe(verb: string, noun: string): boolean {
+    if (verb !== "throw" || noun !== "axe") return false;
+    const here: number = this.a.player_room();
+    if (here === 119 && this.a.dragon_alive()) {
+      this.println("The axe bounces harmlessly off the dragon's thick scales.");
+      return true;
+    }
+    if (here === 117 && this.a.troll_blocking()) {
+      this.println("The troll deftly catches the axe, examines it carefully, and tosses");
+      this.println('it back, declaring, "Good workmanship, but it\'s not valuable enough."');
+      return true;
+    }
+    if (here === 130 && this.a.bear_state() === "hungry") {
+      this.println("The axe misses and lands near the bear where you can't get at it.");
+      return true;
+    }
+    return false; // dwarf-attack path → FSM
+  }
+
+  private iPloverEmerald(verb: string, noun: string): void {
+    if (verb !== "plover") return;
+    const here: number = this.a.player_room();
+    if ((here === 33 || here === 100) && this.a.player.carrying(ID.EMERALD)) {
+      this.a.emerald.try_drop(here);
+      this.a.player.drop(ID.EMERALD);
+      this.println("OK");
+    }
+  }
+
+  private iCalm(verb: string): boolean {
+    if (verb !== "calm" && verb !== "tame") return false;
+    this.println("I'm game. Would you care to explain how?");
+    return true;
+  }
+
+  private iEat(verb: string, noun: string): boolean {
+    if (verb !== "eat") return false;
+    const npcs = ["bird", "snake", "clam", "oyster", "dwarf", "dragon", "troll", "bear"];
+    if (npcs.includes(noun)) {
+      this.println("Don't be ridiculous!");
+      return true;
+    }
+    if (noun !== "" && noun !== "food") {
+      this.println("I think I just lost my appetite.");
+      return true;
+    }
+    return false;
+  }
+
+  private iFeed(verb: string, noun: string): boolean {
+    if (verb !== "feed") return false;
+    if (noun === "bird") {
+      this.println("It's not hungry (it's merely pinin' for the fjords). Besides, you have no bird seed.");
+      return true;
+    }
+    if (noun === "dwarf") {
+      this.a.bump_dwarf_anger();
+      this.println("You fool, dwarves eat only coal! Now you've made him *really* mad!!");
+      return true;
+    }
+    if (noun === "troll") {
+      this.println("Gluttony is not one of the troll's vices. Avarice, however, is.");
+      return true;
+    }
+    if (noun === "snake" || noun === "dragon") {
+      if (noun === "dragon" && !this.a.dragon_alive()) this.println("Don't be ridiculous!");
+      else this.println("There's nothing here it wants to eat (except perhaps you).");
+      return true;
+    }
+    return false;
   }
 }
