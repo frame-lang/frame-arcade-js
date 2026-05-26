@@ -44,6 +44,19 @@ const VERB_SYNONYMS: Record<string, string> = {
 
 const DIRECTIONS = ["north", "south", "east", "west", "up", "down", "in", "out", "enter"];
 
+// Motion-ish verbs that trigger the dark-room pit-fall hazard.
+const MOTION_VERBS = [
+  "north", "south", "east", "west", "up", "down", "in", "out", "enter", "back", "forward",
+  "jump", "climb", "pit", "steps", "dome", "passage", "slit", "stream", "cross", "over",
+  "across", "left", "right", "ne", "nw", "se", "sw", "stairs", "crawl", "depression",
+  "building", "house", "road", "hill", "valley", "forest", "gully", "outdoors", "surface",
+];
+// Canon forced-motion rooms (dwarves/pirate never path into these).
+const FORCED_ROOMS = [16, 22, 26, 32, 40, 59, 79, 89, 90, 113];
+// Canon BITSET(LOC,3) rooms the pirate is barred from.
+const FORBIDDEN_PIRATE_ROOMS = [101, 117, 122];
+const DARK_PIT_PCT = 35;
+
 function truncate5(s: string): string {
   return s.length > 5 ? s.substring(0, 5) : s;
 }
@@ -64,6 +77,7 @@ export class CcaDriver {
   constructor() {
     this.a = Adventure._create();
     this.a.setup_default_aspects();
+    this.a.wake_dwarves(); // canon: dwarves wake at game start, wandering the deep cave
     this.prompts = PromptDispatcher._create();
     this.buildSyn5();
   }
@@ -215,6 +229,7 @@ export class CcaDriver {
     // and bridge-cross must run BEFORE the direction check ("enter"/"over" are
     // motion-ish); the rest run after. Each consumed intercept ends the turn.
     if (this.iBridgeCross(verb)) return this.endTurn();
+    if (MOTION_VERBS.includes(verb) && this.checkDarkPitHazard()) return this.endTurn();
     if (this.iEnterStream(verb, noun)) return this.endTurn();
 
     const room = this.a.player_room();
@@ -285,6 +300,12 @@ export class CcaDriver {
       return;
     }
 
+    // Canon msg #2: a stalking dwarf at the destination blocks the way.
+    if (this.dwarfAtRoom(dest)) {
+      this.println("A little dwarf with a big knife blocks your way.");
+      return;
+    }
+
     this.a.set_old_loc2(this.a.get_old_loc());
     this.a.set_old_loc(current);
     const response = this.a.do_command("move", String(dest));
@@ -323,9 +344,14 @@ export class CcaDriver {
 
   /** Per-turn chain (minimal): tick, lamp warning, reprint room if moved. */
   private afterTurn(moved = false): void {
+    // Canon per-turn chain: walk dwarves/pirate, then tick (which resolves
+    // any dwarf attack at the player's room), then render consequences.
+    this.stepDwarves();
     this.a.tick();
+    this.checkPirateSteal();
     const warn: string = this.a.lamp_warning_text();
     if (warn && warn !== "") this.println(warn);
+    this.checkDwarfAxe();
     this.checkPlayerDeath();
     const st: string = this.a.player_state();
     if (st !== "dead" && st !== "permadead" && (this.a.player_room() !== this.lastRoom || moved)) {
@@ -423,6 +449,114 @@ export class CcaDriver {
 
   private endTurn(): void {
     this.afterTurn();
+  }
+
+  // ---- per-turn dwarf / pirate / dark-pit (ported from driver.gd) ----
+
+  private candidateExits(cur: number): number[] {
+    const out: number[] = [];
+    for (const dest of Object.values(ROOMS[cur] ?? {})) {
+      if (!out.includes(dest)) out.push(dest);
+    }
+    return out;
+  }
+
+  private dwarfAtRoom(room: number): boolean {
+    for (let i = 1; i <= 5; i++) if (this.a.dwarf_room_of(i) === room) return true;
+    return false;
+  }
+
+  // Canon STMT 6010: each stalking dwarf (and the pirate) walks one step
+  // along the section-3 graph; the driver supplies candidate exits, the FSM
+  // does the seeded filter+pick. Snap to the player when seen in the deep cave.
+  private stepDwarves(): void {
+    const playerRoom: number = this.a.player_room();
+    for (let i = 1; i <= 5; i++) {
+      const cur: number = this.a.dwarf_room_of(i);
+      if (cur <= 0) continue; // hidden/dead → not stalking
+      const wasSeen: boolean = this.a.dwarf_is_seen(i);
+      const newRoom: number = this.a.dwarf_pick_destination(i, this.candidateExits(cur), FORCED_ROOMS);
+      this.a.dwarf_step_to(i, newRoom);
+      const nowAt: number = this.a.dwarf_room_of(i);
+      const nowPrev: number = this.a.dwarf_prev_room_of(i);
+      const sawPlayer: boolean = nowAt === playerRoom || nowPrev === playerRoom;
+      if (sawPlayer || (wasSeen && playerRoom >= 15)) this.a.dwarf_snap_to_player(i);
+      else if (playerRoom < 15) this.a.dwarf_unsee(i);
+    }
+    if (this.a.pirate_state() === "stalking") {
+      const pCur: number = this.a.pirate_room();
+      const pWasSeen: boolean = this.a.pirate_is_seen();
+      const pNew: number = this.a.pirate_pick_destination(this.candidateExits(pCur), FORCED_ROOMS.concat(FORBIDDEN_PIRATE_ROOMS));
+      this.a.pirate_step_to(pNew);
+      const pAt: number = this.a.pirate_room();
+      const pPrev: number = this.a.pirate_prev_room();
+      const pSaw: boolean = pAt === playerRoom || pPrev === playerRoom;
+      if (pSaw || (pWasSeen && playerRoom >= 15)) this.a.pirate_snap_to_player();
+      else if (playerRoom < 15) this.a.pirate_unsee();
+    }
+  }
+
+  // Canon dwarf-attack prose ladder. Counts populated by the FSM tick's
+  // _maybe_dwarf_attack; drain the legacy single-dwarf flags either way.
+  private checkDwarfAxe(): void {
+    const dtotal: number = this.a.dwarf_count_in_room();
+    const attack: number = this.a.dwarf_attack_count();
+    const stick: number = this.a.dwarf_hit_count();
+    this.a.dwarf_threw_axe();
+    this.a.dwarf_threw_and_missed();
+    if (dtotal === 0) return;
+    if (!this.a.is_dwarf_first_encounter_done()) this.a.mark_dwarf_first_encounter_done();
+    if (dtotal === 1) this.println("There is a threatening little dwarf in the room with you!");
+    else this.println(`There are ${dtotal} threatening little dwarves in the room with you.`);
+    if (attack === 0) return;
+    if (attack === 1) {
+      this.println("One sharp nasty knife is thrown at you!");
+      this.println(stick === 0 ? "It misses!" : "It gets you!");
+      return;
+    }
+    this.println(`${attack} of them throw knives at you!`);
+    if (stick === 0) this.println("None of them hit you!");
+    else if (stick === 1) this.println("One of them gets you!");
+    else this.println(`${stick} of them get you!`);
+  }
+
+  private checkPirateSteal(): void {
+    if (this.a.pirate_state() !== "stalking") return;
+    const msg: string = this.a.pirate_attempt_steal();
+    if (msg !== "") {
+      this.println(msg);
+      return;
+    }
+    this.checkPirateRustle();
+  }
+
+  private checkPirateRustle(): void {
+    if (this.a.pirate_state() !== "stalking") return;
+    if (this.a.player_room() < 15) return;
+    if (this.a.chance.decide("pirate_rustle", 20)) {
+      this.println("There are faint rustling noises from the darkness behind you.");
+    }
+  }
+
+  // Canon dark-room pit-fall: one free "pitch dark" warning per room, then a
+  // 35% pit-fall roll on subsequent move attempts. Returns true to block.
+  private checkDarkPitHazard(): boolean {
+    if (!this.a.room_is_dark_now()) {
+      if (this.a.dark_warned_room() !== -1) this.a.clear_dark_warning();
+      return false;
+    }
+    const current: number = this.a.player_room();
+    if (current !== this.a.dark_warned_room()) {
+      this.println("It is now pitch dark. If you proceed you will likely fall into a pit.");
+      this.a.set_dark_warned_room(current);
+      return true;
+    }
+    if (this.a.chance.decide("dark_pit_fall", DARK_PIT_PCT)) {
+      this.println("You fell into a pit and broke every bone in your body!");
+      this.a.player.die();
+      return true;
+    }
+    return false;
   }
 
   // ---- canon verb intercepts (ported from driver.gd _intercept_*) ----
