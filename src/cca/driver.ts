@@ -112,6 +112,12 @@ export class CcaDriver {
     return this.a.player_room();
   }
 
+  /** Debug/test hook: the underlying Adventure machine (for inspection/setup). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  machine(): any {
+    return this.a;
+  }
+
   // ---- internals ----
 
   private drain(): string[] {
