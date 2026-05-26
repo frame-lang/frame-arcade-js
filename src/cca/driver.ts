@@ -1,5 +1,15 @@
-import { Adventure } from "./cca.machine.js";
-import { ROOMS, GATES, type Gate } from "./topology";
+import { Adventure, PromptDispatcher } from "./cca.machine.js";
+import { ROOMS, GATES } from "./topology";
+
+// Canon object ids (ported from driver.gd constants), for inventory.
+const ID = {
+  BIRD: 100, CHAIN: 101,
+  GOLD: 110, SILVER: 111, DIAMONDS: 112, JEWELRY: 113, PEARL: 114, VASE: 115,
+  EGGS: 116, TRIDENT: 117, EMERALD: 118, SPICES: 119, CHEST: 120, PYRAMID: 121,
+  RUG: 122, COINS: 123,
+  ROD: 130, KEYS: 131, BOTTLE: 132, CAGE: 133, FOOD: 134, PILLOW: 135, AXE: 136,
+  CLAM: 137, OYSTER: 138, BATTERIES: 139, MAGAZINE: 140, MARK_ROD: 141, LAMP: 142,
+} as const;
 
 /**
  * CCA driver — parser + dispatch + per-turn engine, ported from the
@@ -42,13 +52,19 @@ export class CcaDriver {
   // The Adventure FSM is untyped (generated .machine.js). `any` is intentional.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private a: any;
+  // PromptDispatcher is a session-scoped FSM the driver owns (not composed
+  // on Adventure) — it holds "which modal Y/N prompt is open" as state.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private prompts: any;
   private out: string[] = [];
   private lastRoom = -1;
+  private deadEnd = false;
   private syn5: Record<string, string> = {};
 
   constructor() {
     this.a = Adventure._create();
     this.a.setup_default_aspects();
+    this.prompts = PromptDispatcher._create();
     this.buildSyn5();
   }
 
@@ -128,13 +144,51 @@ export class CcaDriver {
   }
 
   private processInput(text: string): void {
+    if (this.deadEnd) {
+      this.println("The game is over. Reload the page to play again.");
+      return;
+    }
     const { verb, noun } = this.parse(text);
     if (verb === "") {
       this.println("I'm afraid I don't understand.");
       return;
     }
 
+    // Modal Y/N prompt (currently: death/revive). Capture the prompt name
+    // BEFORE confirm/decline transitions the dispatcher back to $Idle.
+    if (this.prompts.is_active()) {
+      const promptName: string = this.prompts.current_prompt();
+      if (verb === "yes") {
+        this.prompts.confirm();
+        if (promptName === "revive") {
+          const prose: string = this.a.player.get_revive_response();
+          this.a.player.revive();
+          this.println(prose);
+          this.lastRoom = -1;
+          this.printRoom();
+        }
+        return;
+      } else if (verb === "no") {
+        this.prompts.decline();
+        if (promptName === "revive") {
+          this.println(this.a.player.get_permadeath_msg());
+          this.deadEnd = true;
+        }
+        return;
+      } else if (this.prompts.accepts_only_yes_no()) {
+        this.println("Please answer the question.");
+        return;
+      } else {
+        this.prompts.cancel();
+        // not a yes/no prompt — fall through to normal processing
+      }
+    }
+
     // Driver-side UI verbs (minimal subset).
+    if (verb === "inventory") {
+      this.println(this.formatInventory());
+      return;
+    }
     if (verb === "score") {
       this.println(`Your score is ${this.a.score()}.`);
       return;
@@ -246,7 +300,9 @@ export class CcaDriver {
     this.a.tick();
     const warn: string = this.a.lamp_warning_text();
     if (warn && warn !== "") this.println(warn);
-    if (this.a.player_room() !== this.lastRoom || moved) {
+    this.checkPlayerDeath();
+    const st: string = this.a.player_state();
+    if (st !== "dead" && st !== "permadead" && (this.a.player_room() !== this.lastRoom || moved)) {
       this.printRoom();
     }
   }
@@ -255,5 +311,87 @@ export class CcaDriver {
     this.lastRoom = this.a.player_room();
     const desc: string = this.a.do_command("look", "");
     this.println(desc);
+  }
+
+  private checkPlayerDeath(): void {
+    if (this.prompts.is_active()) return;
+    const s: string = this.a.player_state();
+    if (s === "dead" || s === "permadead") this.dropInventoryAtDeathRoom();
+    if (s === "dead") {
+      if (this.a.endgame_closing()) {
+        this.println(
+          "It looks as though you're dead. Well, seeing as how it's so close to closing time anyway, I think we'll just call it a day.",
+        );
+        this.deadEnd = true;
+        return;
+      }
+      this.prompts.offer_revive();
+      this.println(this.a.player.get_revive_prompt());
+    } else if (s === "permadead") {
+      this.println(this.a.player.get_permadeath_msg());
+      this.deadEnd = true;
+    }
+  }
+
+  // Canon: dying drops every carried item/treasure at the death room. The
+  // Player FSM's die() only moves the Player; the item/treasure FSMs need an
+  // explicit try_drop or they'd stay $Carried (idempotent — safe to repeat).
+  private dropInventoryAtDeathRoom(): void {
+    const here: number = this.a.player.get_room();
+    const items = [
+      this.a.rod_item, this.a.keys_item, this.a.bottle_item, this.a.cage_item,
+      this.a.food_item, this.a.pillow_item, this.a.axe_item, this.a.clam_item,
+      this.a.oyster_item, this.a.batteries_item, this.a.magazine_item,
+      this.a.mark_rod_item, this.a.lamp_item,
+    ];
+    for (const it of items) if (it.is_carried()) it.try_drop(here);
+    const treasures = [
+      this.a.gold, this.a.silver, this.a.diamonds, this.a.jewelry, this.a.pearl,
+      this.a.vase, this.a.eggs, this.a.trident, this.a.emerald, this.a.spices,
+      this.a.chest, this.a.pyramid, this.a.rug, this.a.coins, this.a.chain,
+    ];
+    for (const t of treasures) if (t.get_state() === "carried") t.try_drop(here);
+  }
+
+  private formatInventory(): string {
+    const p = this.a.player;
+    const items: string[] = [];
+    const hasBird = p.carrying(ID.BIRD);
+    const hasCage = p.carrying(ID.CAGE);
+    if (hasBird && hasCage) items.push("  Little bird in cage");
+    else if (hasBird) items.push("  Little bird");
+    else if (hasCage) items.push("  Wicker cage");
+    if (p.carrying(ID.ROD)) items.push("  Black rod with a rusty star on the end");
+    if (p.carrying(ID.MARK_ROD)) items.push("  Black rod with a rusty mark on the end");
+    if (p.carrying(ID.KEYS)) items.push("  Set of keys");
+    if (p.carrying(ID.LAMP)) items.push("  Brass lantern");
+    if (p.carrying(ID.BOTTLE)) {
+      if (this.a.bottle.has_water()) items.push("  Water in the bottle");
+      else if (this.a.bottle.has_oil()) items.push("  Oil in the bottle");
+      else items.push("  Small bottle");
+    }
+    if (p.carrying(ID.FOOD)) items.push("  Tasty food");
+    if (p.carrying(ID.PILLOW)) items.push("  Velvet pillow");
+    if (p.carrying(ID.AXE)) items.push("  Dwarf's axe");
+    if (p.carrying(ID.CLAM)) items.push("  Giant clam");
+    if (p.carrying(ID.MAGAZINE)) items.push('  "Spelunker Today" magazine');
+    if (p.carrying(ID.BATTERIES)) items.push("  Fresh batteries");
+    if (p.carrying(ID.GOLD)) items.push("  Large gold nugget");
+    if (p.carrying(ID.SILVER)) items.push("  Bars of silver");
+    if (p.carrying(ID.DIAMONDS)) items.push("  Several diamonds");
+    if (p.carrying(ID.JEWELRY)) items.push("  Precious jewelry");
+    if (p.carrying(ID.PEARL)) items.push("  Glistening pearl");
+    if (p.carrying(ID.VASE)) items.push(this.a.vase.is_broken() ? "  Worthless shards of pottery" : "  Ming vase");
+    if (p.carrying(ID.EGGS)) items.push("  Nest of golden eggs");
+    if (p.carrying(ID.TRIDENT)) items.push("  Jeweled trident");
+    if (p.carrying(ID.EMERALD)) items.push("  Egg-sized emerald");
+    if (p.carrying(ID.SPICES)) items.push("  Rare spices");
+    if (p.carrying(ID.CHEST)) items.push("  Treasure chest");
+    if (p.carrying(ID.PYRAMID)) items.push("  Platinum pyramid");
+    if (p.carrying(ID.RUG)) items.push("  Persian rug");
+    if (p.carrying(ID.COINS)) items.push("  Rare coins");
+    if (p.carrying(ID.CHAIN)) items.push("  Golden chain");
+    if (items.length === 0) return "You're not carrying anything.";
+    return "You are currently holding the following:\n" + items.join("\n");
   }
 }
