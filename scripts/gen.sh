@@ -5,8 +5,9 @@ set -euo pipefail
 
 FRAMEC="${FRAMEC:-framec}"
 command -v "$FRAMEC" >/dev/null || { echo "framec not found (set FRAMEC=path)"; exit 1; }
+shopt -s nullglob   # CCA (src/cca/*.frm) may not exist yet during early phases
 
-for frm in src/games/*/*.frm; do
+for frm in src/games/*/*.frm src/cca/*.frm; do
   dir="$(dirname "$frm")"
   base="$(basename "$frm" .frm)"
   echo "framec: $frm"

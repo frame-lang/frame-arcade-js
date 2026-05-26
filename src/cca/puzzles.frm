@@ -1,0 +1,669 @@
+@@[target("javascript")]
+
+// CCA puzzle / object state machines.
+//
+// CANONICAL: mirrors the Godot reference
+// (frame-arcade/cca/frame/puzzles.fgd) exactly — same systems
+// (Lamp / Treasure / Item / EggsIncantation / CrystalBridge / Grate /
+// RustyDoor / VendingMachine / Bottle / Plant), states, transitions,
+// the Lamp $On HSM parent with $Bright/$Dim/$Out children, and the
+// parameterized Treasure(home_room,value,fragile) / Item(home_room).
+// Only action bodies differ (JS host code). The Godot
+// @@[persist]/@@[save]/@@[load] + ": RefCounted" are dropped (the JS
+// port serializes save/load host-side; dropping them is topology-neutral).
+
+@@[main]
+@@system Lamp {
+
+    operations:
+        current_state(): string { @@:(@@:system.state) }
+
+    interface:
+        light()
+        extinguish()
+        refresh()
+        tick()
+        get_state(): string
+        is_lit(): bool
+        battery_left(): int
+        last_message(): string
+
+    machine:
+        $Off {
+            light() {
+                if (this.battery <= 0) {
+                    -> $Out
+                } else {
+                    -> $Bright
+                }
+            }
+
+            tick() { }
+
+            refresh() {
+                this.battery = this.MAX_BATTERY
+            }
+
+            get_state(): string    { @@:("off") }
+            is_lit(): bool         { @@:(false) }
+            battery_left(): int    { @@:(this.battery) }
+            last_message(): string { @@:("") }
+        }
+
+        $On {
+            extinguish() {
+                this.last_warning = ""
+                -> $Off
+            }
+
+            tick() {
+                if (this.battery > 0) {
+                    this.battery = this.battery - 1
+                }
+            }
+
+            refresh() {
+                this.battery = this.MAX_BATTERY
+                this.last_warning = ""
+                -> $Bright
+            }
+
+            get_state(): string    { @@:("on") }
+            is_lit(): bool         { @@:(true) }
+            battery_left(): int    { @@:(this.battery) }
+            last_message(): string { @@:(this.last_warning) }
+        }
+
+        $Bright => $On {
+            tick() {
+                this.last_warning = ""
+                if (this.battery > 0) {
+                    this.battery = this.battery - 1
+                }
+                if (this.battery <= 0) {
+                    -> $Out
+                } else if (this.battery <= this.DIM_THRESHOLD) {
+                    this.last_warning = "Your lamp is getting dim. You'd best start wrapping this up, unless you can find some fresh batteries. I seem to recall there's a vending machine in the maze. Bring some coins with you."
+                    -> $Dim
+                }
+            }
+
+            get_state(): string { @@:("bright") }
+            => $^
+        }
+
+        $Dim => $On {
+            $>() {
+                this.last_warning = "Your lamp is getting dim. You'd best start wrapping this up, unless you can find some fresh batteries. I seem to recall there's a vending machine in the maze. Bring some coins with you."
+            }
+
+            tick() {
+                this.last_warning = ""
+                if (this.battery > 0) {
+                    this.battery = this.battery - 1
+                }
+                if (this.battery <= 0) {
+                    -> $Out
+                }
+            }
+
+            get_state(): string { @@:("dim") }
+            => $^
+        }
+
+        $Out => $On {
+            $>() {
+                this.last_warning = "Your lamp has run out of power."
+            }
+
+            tick() {
+                this.last_warning = ""
+            }
+
+            refresh() {
+                this.battery = this.MAX_BATTERY
+                this.last_warning = ""
+                -> $Bright
+            }
+
+            is_lit(): bool      { @@:(false) }
+            get_state(): string { @@:("out") }
+            => $^
+        }
+
+    domain:
+        MAX_BATTERY: int = 330
+        DIM_THRESHOLD: int = 30
+        battery: int = 330
+        last_warning: string = ""
+}
+
+@@system Treasure(home_room: int = 0, value: int = 0, fragile: bool = false) {
+
+    interface:
+        try_take(at_room: int): bool
+        try_drop(at_room: int): string
+        try_drop_soft(at_room: int): string
+        reappear(at_room: int)
+        consume()
+        get_state(): string
+        get_location(): int
+        get_value(): int
+        is_deposited(): bool
+        is_broken(): bool
+        is_vanished(): bool
+
+    machine:
+        $InRoom {
+            try_take(at_room: int): bool {
+                if (at_room == this.location_room) {
+                    -> $Carried
+                    @@:return(true)
+                }
+                @@:(false)
+            }
+            try_drop(at_room: int): string {
+                @@:("not carried")
+            }
+            try_drop_soft(at_room: int): string {
+                @@:("not carried")
+            }
+            reappear(at_room: int) {
+                this.location_room = at_room
+            }
+            consume() {
+                -> $Vanished
+            }
+            get_state(): string      { @@:("in_room") }
+            get_location(): int      { @@:(this.location_room) }
+            get_value(): int         { @@:(this.value) }
+            is_deposited(): bool     { @@:(false) }
+            is_broken(): bool        { @@:(false) }
+            is_vanished(): bool      { @@:(false) }
+        }
+
+        $Carried {
+            try_take(at_room: int): bool {
+                @@:(false)
+            }
+            try_drop(at_room: int): string {
+                this.location_room = at_room
+                if (at_room == this.DEPOSIT_ROOM) {
+                    -> $Deposited
+                    @@:return("deposited")
+                }
+                if (this.fragile) {
+                    -> $Broken
+                    @@:return("broken")
+                }
+                -> $InRoom
+                @@:("dropped")
+            }
+            try_drop_soft(at_room: int): string {
+                this.location_room = at_room
+                if (at_room == this.DEPOSIT_ROOM) {
+                    -> $Deposited
+                    @@:return("deposited")
+                }
+                -> $InRoom
+                @@:("dropped_soft")
+            }
+            reappear(at_room: int) {
+                this.location_room = at_room
+                -> $InRoom
+            }
+            consume() {
+                -> $Vanished
+            }
+            get_state(): string      { @@:("carried") }
+            get_location(): int      { @@:(-1) }
+            get_value(): int         { @@:(this.value) }
+            is_deposited(): bool     { @@:(false) }
+            is_broken(): bool        { @@:(false) }
+            is_vanished(): bool      { @@:(false) }
+        }
+
+        $Deposited {
+            try_take(at_room: int): bool {
+                @@:(false)
+            }
+            try_drop(at_room: int): string {
+                @@:("already deposited")
+            }
+            try_drop_soft(at_room: int): string {
+                @@:("already deposited")
+            }
+            reappear(at_room: int) {
+                this.location_room = at_room
+                -> $InRoom
+            }
+            consume() {
+            }
+            get_state(): string      { @@:("deposited") }
+            get_location(): int      { @@:(this.DEPOSIT_ROOM) }
+            get_value(): int         { @@:(this.value) }
+            is_deposited(): bool     { @@:(true) }
+            is_broken(): bool        { @@:(false) }
+            is_vanished(): bool      { @@:(false) }
+        }
+
+        $Broken {
+            try_take(at_room: int): bool {
+                @@:(false)
+            }
+            try_drop(at_room: int): string {
+                @@:("already broken")
+            }
+            try_drop_soft(at_room: int): string {
+                @@:("already broken")
+            }
+            reappear(at_room: int) {
+            }
+            consume() { }
+            get_state(): string      { @@:("broken") }
+            get_location(): int      { @@:(this.location_room) }
+            get_value(): int         { @@:(0) }
+            is_deposited(): bool     { @@:(false) }
+            is_broken(): bool        { @@:(true) }
+            is_vanished(): bool      { @@:(false) }
+        }
+
+        $Vanished {
+            try_take(at_room: int): bool        { @@:(false) }
+            try_drop(at_room: int): string      { @@:("vanished") }
+            try_drop_soft(at_room: int): string { @@:("vanished") }
+            reappear(at_room: int) {
+                this.location_room = at_room
+                -> $InRoom
+            }
+            consume() { }
+            get_state(): string       { @@:("vanished") }
+            get_location(): int       { @@:(-1) }
+            get_value(): int          { @@:(0) }
+            is_deposited(): bool      { @@:(false) }
+            is_broken(): bool         { @@:(false) }
+            is_vanished(): bool       { @@:(true) }
+        }
+
+    domain:
+        home_room: int = home_room
+        value: int = value
+        fragile: bool = fragile
+        location_room: int = home_room
+        DEPOSIT_ROOM: int = 3
+}
+
+@@system Item(home_room: int = -1) {
+
+    interface:
+        try_take(at_room: int): bool
+        try_drop(at_room: int): bool
+        place(at_room: int)
+        consume()
+        is_carried(): bool
+        is_in_room(r: int): bool
+        get_state(): string
+        get_location(): int
+
+    machine:
+        $InRoom {
+            try_take(at_room: int): bool {
+                if (this.location > 0 && at_room == this.location) {
+                    -> $Carried
+                    @@:return(true)
+                }
+                @@:(false)
+            }
+            try_drop(at_room: int): bool {
+                @@:(false)
+            }
+            place(at_room: int) {
+                this.location = at_room
+            }
+            consume() {
+                this.location = -1
+                -> $Consumed
+            }
+            is_carried(): bool       { @@:(false) }
+            is_in_room(r: int): bool { @@:(this.location > 0 && r == this.location) }
+            get_state(): string      { @@:("in_room") }
+            get_location(): int      { @@:(this.location) }
+        }
+
+        $Carried {
+            try_take(at_room: int): bool {
+                @@:(false)
+            }
+            try_drop(at_room: int): bool {
+                this.location = at_room
+                -> $InRoom
+                @@:return(true)
+            }
+            place(at_room: int) {
+                this.location = at_room
+                -> $InRoom
+            }
+            consume() {
+                this.location = -1
+                -> $Consumed
+            }
+            is_carried(): bool       { @@:(true) }
+            is_in_room(r: int): bool { @@:(false) }
+            get_state(): string      { @@:("carried") }
+            get_location(): int      { @@:(-1) }
+        }
+
+        $Consumed {
+            try_take(at_room: int): bool {
+                @@:(false)
+            }
+            try_drop(at_room: int): bool {
+                @@:(false)
+            }
+            place(at_room: int) {
+                this.location = at_room
+                -> $InRoom
+            }
+            consume() { }
+            is_carried(): bool       { @@:(false) }
+            is_in_room(r: int): bool { @@:(false) }
+            get_state(): string      { @@:("consumed") }
+            get_location(): int      { @@:(-1) }
+        }
+
+    domain:
+        home_room: int = home_room
+        location: int = home_room
+}
+
+@@system EggsIncantation {
+
+    interface:
+        say(word: string): string
+        get_state(): string
+
+    machine:
+        $Idle {
+            say(word: string): string {
+                if (word == "fee") {
+                    -> $WaitingFie
+                    @@:return("Fie?")
+                }
+                @@:("Nothing happens.")
+            }
+            get_state(): string  { @@:("idle") }
+        }
+
+        $WaitingFie {
+            say(word: string): string {
+                if (word == "fie") {
+                    -> $WaitingFoe
+                    @@:return("Foe?")
+                }
+                -> $Idle
+                @@:("OK")
+            }
+            get_state(): string  { @@:("waiting_fie") }
+        }
+
+        $WaitingFoe {
+            say(word: string): string {
+                if (word == "foe") {
+                    -> $WaitingFoo
+                    @@:return("Foo?")
+                }
+                -> $Idle
+                @@:("OK")
+            }
+            get_state(): string  { @@:("waiting_foe") }
+        }
+
+        $WaitingFoo {
+            say(word: string): string {
+                if (word == "foo") {
+                    -> $Idle
+                    @@:return("Done!")
+                }
+                -> $Idle
+                @@:("OK")
+            }
+            get_state(): string  { @@:("waiting_foo") }
+        }
+}
+
+@@system CrystalBridge {
+
+    interface:
+        wave(): string
+        get_state(): string
+        is_built(): bool
+
+    machine:
+        $NoBridge {
+            wave(): string  {
+                -> $Bridge
+                @@:return("A crystal bridge now spans the fissure!")
+            }
+            get_state(): string  { @@:("no_bridge") }
+            is_built(): bool     { @@:(false) }
+        }
+
+        $Bridge {
+            wave(): string  {
+                -> $NoBridge
+                @@:return("OK")
+            }
+            get_state(): string  { @@:("built") }
+            is_built(): bool     { @@:(true) }
+        }
+}
+
+@@system Grate {
+
+    interface:
+        unlock(have_keys: bool): string
+        lock(): string
+        get_state(): string
+        is_locked(): bool
+
+    machine:
+        $Locked {
+            unlock(have_keys: bool): string  {
+                if (have_keys) {
+                    -> $Unlocked
+                    @@:return("The grate is now unlocked.")
+                }
+                @@:("You have no keys!")
+            }
+            lock(): string           { @@:("It was already locked.") }
+            get_state(): string      { @@:("locked") }
+            is_locked(): bool        { @@:(true) }
+        }
+
+        $Unlocked {
+            unlock(have_keys: bool): string  { @@:("It was already unlocked.") }
+            lock(): string           {
+                -> $Locked
+                @@:return("The grate is now locked.")
+            }
+            get_state(): string      { @@:("unlocked") }
+            is_locked(): bool        { @@:(false) }
+        }
+}
+
+@@system RustyDoor {
+
+    interface:
+        oil(): string
+        water(): string
+        get_state(): string
+        is_rusty(): bool
+
+    machine:
+        $Rusty {
+            oil(): string  {
+                -> $Oiled
+                @@:return("The oil has freed up the hinges so that the door will now move, although it requires some effort.")
+            }
+            water(): string {
+                @@:("The hinges are quite thoroughly rusted now and won't budge.")
+            }
+            get_state(): string      { @@:("rusty") }
+            is_rusty(): bool         { @@:(true) }
+        }
+
+        $Oiled {
+            oil(): string {
+                @@:("The oil has freed up the hinges so that the door will now move, although it requires some effort.")
+            }
+            water(): string {
+                -> $Rusty
+                @@:return("The hinges are quite thoroughly rusted now and won't budge.")
+            }
+            get_state(): string      { @@:("oiled") }
+            is_rusty(): bool         { @@:(false) }
+        }
+}
+
+@@system VendingMachine {
+
+    interface:
+        insert(have_coins: bool): string
+        get_state(): string
+        is_loaded(): bool
+
+    machine:
+        $Loaded {
+            insert(have_coins: bool): string  {
+                if (have_coins) {
+                    -> $Empty
+                    @@:return("The vending machine clanks twice and dispenses a fresh set of lamp batteries.")
+                }
+                @@:("You aren't carrying it!")
+            }
+            get_state(): string      { @@:("loaded") }
+            is_loaded(): bool        { @@:(true) }
+        }
+
+        $Empty {
+            insert(have_coins: bool): string  {
+                @@:("The vending machine is empty. The hand-lettered sign now reads 'OUT OF BATTERIES'.")
+            }
+            get_state(): string      { @@:("empty") }
+            is_loaded(): bool        { @@:(false) }
+        }
+}
+
+@@system Bottle {
+
+    interface:
+        fill(at_water_source: bool): string
+        fill_oil(at_oil_source: bool): string
+        pour(): string
+        drink(): string
+        get_state(): string
+        has_water(): bool
+        has_oil(): bool
+
+    machine:
+        $Empty {
+            fill(at_water_source: bool): string  {
+                if (at_water_source) {
+                    -> $Water
+                    @@:return("Your bottle is now full of water.")
+                }
+                @@:("There is nothing here with which to fill the bottle.")
+            }
+            fill_oil(at_oil_source: bool): string  {
+                if (at_oil_source) {
+                    -> $Oil
+                    @@:return("Your bottle is now full of oil.")
+                }
+                @@:("There is nothing here with which to fill the bottle.")
+            }
+            pour(): string           { @@:("You aren't carrying it!") }
+            drink(): string          { @@:("You aren't carrying it!") }
+            get_state(): string      { @@:("empty") }
+            has_water(): bool        { @@:(false) }
+            has_oil(): bool          { @@:(false) }
+        }
+
+        $Water {
+            fill(at_water_source: bool): string  {
+                @@:("Your bottle is already full.")
+            }
+            fill_oil(at_oil_source: bool): string  {
+                @@:("Your bottle is already full.")
+            }
+            pour(): string           {
+                -> $Empty
+                @@:return("Your bottle is empty and the ground is wet.")
+            }
+            drink(): string          {
+                -> $Empty
+                @@:return("The bottle of water is now empty.")
+            }
+            get_state(): string      { @@:("water") }
+            has_water(): bool        { @@:(true) }
+            has_oil(): bool          { @@:(false) }
+        }
+
+        $Oil {
+            fill(at_water_source: bool): string  {
+                @@:("Your bottle is already full.")
+            }
+            fill_oil(at_oil_source: bool): string  {
+                @@:("Your bottle is already full.")
+            }
+            pour(): string           {
+                -> $Empty
+                @@:return("Your bottle is empty and the ground is wet.")
+            }
+            drink(): string          {
+                @@:("Drink that?  Don't be ridiculous.")
+            }
+            get_state(): string      { @@:("oil") }
+            has_water(): bool        { @@:(false) }
+            has_oil(): bool          { @@:(true) }
+        }
+}
+
+@@system Plant {
+
+    interface:
+        water(): string
+        get_state(): string
+        is_tall(): bool
+        is_huge(): bool
+
+    machine:
+        $Tiny {
+            water(): string          {
+                -> $Tall
+                @@:return("The plant spurts into furious growth for a few seconds.")
+            }
+            get_state(): string      { @@:("tiny") }
+            is_tall(): bool          { @@:(false) }
+            is_huge(): bool          { @@:(false) }
+        }
+
+        $Tall {
+            water(): string          {
+                -> $Huge
+                @@:return("The plant grows explosively, almost filling the bottom of the pit.")
+            }
+            get_state(): string      { @@:("tall") }
+            is_tall(): bool          { @@:(true) }
+            is_huge(): bool          { @@:(false) }
+        }
+
+        $Huge {
+            water(): string          {
+                -> $Tiny
+                @@:return("You've over-watered the plant! It's shriveling up! It's, it's...")
+            }
+            get_state(): string      { @@:("huge") }
+            is_tall(): bool          { @@:(true) }
+            is_huge(): bool          { @@:(true) }
+        }
+}

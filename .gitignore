@@ -6,3 +6,5 @@ dist/
 # framec-generated artifacts — regenerate with `npm run gen`
 src/games/*/*.machine.js
 src/games/*/*.dot
+src/cca/*.machine.js
+src/cca/*.dot
