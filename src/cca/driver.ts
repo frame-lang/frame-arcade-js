@@ -136,7 +136,7 @@ export class CcaDriver {
       "extinguish", "release", "attack", "examine", "unlock", "insert", "plover",
       "inventory", "passage", "forward", "stream", "across", "stairs", "building",
       "valley", "cavern", "barren", "secret", "cobbles", "upstream", "downstream",
-      "entrance", "surface", "forest", "broken", "canyon", "debris",
+      "entrance", "surface", "forest", "broken", "canyon", "debris", "wizard",
     ];
     for (const c of canon) this.syn5[truncate5(c)] = c;
   }
@@ -180,6 +180,9 @@ export class CcaDriver {
           this.println(prose);
           this.lastRoom = -1;
           this.printRoom();
+        } else if (promptName === "quit") {
+          this.println("Goodbye.");
+          this.deadEnd = true;
         }
         return;
       } else if (verb === "no") {
@@ -187,6 +190,8 @@ export class CcaDriver {
         if (promptName === "revive") {
           this.println(this.a.player.get_permadeath_msg());
           this.deadEnd = true;
+        } else if (promptName === "quit") {
+          this.println("OK.");
         }
         return;
       } else if (this.prompts.accepts_only_yes_no()) {
@@ -198,32 +203,8 @@ export class CcaDriver {
       }
     }
 
-    // Driver-side UI verbs (minimal subset).
-    if (verb === "inventory") {
-      this.println(this.formatInventory());
-      return;
-    }
-    if (verb === "score") {
-      this.println(`Your score is ${this.a.score()}.`);
-      return;
-    }
-    if (verb === "help") {
-      this.println("Type commands like: LOOK, NORTH/N, TAKE KEYS, DROP LAMP, ON/OFF (lamp),");
-      this.println("XYZZY, PLUGH, INVENTORY, SCORE. Compass: N S E W U D; also IN/OUT/ENTER.");
-      return;
-    }
-    if (verb === "light") {
-      this.a.light_lamp();
-      this.println(this.a.is_lit() ? "Your lamp is now on." : "You have no source of light.");
-      this.afterTurn();
-      return;
-    }
-    if (verb === "extinguish") {
-      this.a.extinguish_lamp();
-      this.println("Your lamp is now off.");
-      this.afterTurn();
-      return;
-    }
+    // UI verbs (driver-handled; each case manages its own turn).
+    if (this.handleUiVerb(verb, noun)) return;
 
     // Canon-order verb intercepts (driver-side special cases). enter-stream
     // and bridge-cross must run BEFORE the direction check ("enter"/"over" are
@@ -445,6 +426,165 @@ export class CcaDriver {
     if (p.carrying(ID.CHAIN)) items.push("  Golden chain");
     if (items.length === 0) return "You're not carrying anything.";
     return "You are currently holding the following:\n" + items.join("\n");
+  }
+
+  // ---- UI verbs (ported from driver.gd _handle_ui_verb subset) ----
+  private handleUiVerb(verb: string, noun: string): boolean {
+    switch (verb) {
+      case "help":
+        this.println("Commands: LOOK · compass N/S/E/W/U/D (also IN/OUT/ENTER) · TAKE/DROP <obj> ·");
+        this.println("ON/OFF (lamp) · INVENTORY (I) · SCORE · XYZZY/PLUGH/PLOVER · HINT · BACK ·");
+        this.println("BRIEF · QUIT. Many canon verbs work too (ATTACK, FEED, THROW, WAVE, FILL …).");
+        return true;
+      case "info":
+        this.println("A faithful Frame-state-machine port of Colossal Cave Adventure (Crowther & Woods, 1977).");
+        return true;
+      case "score":
+        this.println(
+          `Score: ${this.a.score()} — treasures ${this.a.treasure_score()} (${this.a.treasures_deposited()}/15 deposited), visits ${this.a.visit_score()}, hints ${this.a.hint_penalty()}, endgame ${this.a.endgame_score()}`,
+        );
+        return true;
+      case "inventory":
+        this.println(this.formatInventory());
+        return true;
+      case "light":
+        this.a.light_lamp();
+        this.println(this.a.is_lit() ? "Your lamp is now on." : "You have no source of light.");
+        this.afterTurn();
+        return true;
+      case "extinguish":
+        this.a.extinguish_lamp();
+        this.println("Your lamp is now off.");
+        this.afterTurn();
+        return true;
+      case "quit":
+        this.prompts.offer_quit();
+        this.println("Do you really want to quit now?");
+        return true;
+      case "hint":
+        this.println(this.a.request_hint(noun !== "" ? noun : "bird"));
+        this.afterTurn();
+        return true;
+      case "hours":
+        this.println("Colossal Cave is open all day, every day.");
+        return true;
+      case "wizard":
+        this.println('"Are you a wizard?"  "Prove it! Say the magic word!"');
+        this.println('"Foo, you are nothing but a charlatan!"');
+        return true;
+      case "maint":
+        this.println("A cloud of green smoke clears to reveal a tall wizard in grey, who");
+        this.println('declares, "Maintenance mode requires a real PDP-10. This is neither."');
+        return true;
+      case "rub":
+        this.println(
+          noun === "lamp"
+            ? "Rubbing the electric lamp is not particularly rewarding. Anyway, nothing exciting happens."
+            : "Peculiar. Nothing unexpected happens.",
+        );
+        return true;
+      case "say":
+        if (noun === "") {
+          this.println("Say what?");
+          return true;
+        }
+        if (["xyzzy", "plugh", "plover", "fee", "fie", "foe", "foo"].includes(noun)) {
+          this.processInput(noun);
+          return true;
+        }
+        this.println(`Okay, "${noun}".`);
+        return true;
+      case "cave":
+        this.println(
+          this.a.player_room() <= 8
+            ? "I don't know where the cave is, but hereabouts no stream can run on the surface for long. I would try the stream."
+            : "I need more detailed instructions to do that.",
+        );
+        return true;
+      case "map":
+        if (this.a.player_room() !== 3 && this.a.player_room() < 15) {
+          this.println("I don't know that word.");
+          return true;
+        }
+        this.println("[A hand-drawn sketch of Crowther's Bedquilt cave map flickers before you.]");
+        return true;
+      case "brief":
+        this.a.enable_brief_mode();
+        this.println("Okay, from now on I'll only describe a place in full the first time you");
+        this.println("come to it. To get the full description, say LOOK.");
+        return true;
+      case "blast":
+        return this.doBlast();
+      case "wake":
+        return this.doWake();
+      case "back":
+        return this.doBack();
+      default:
+        return false;
+    }
+  }
+
+  private doBlast(): boolean {
+    if (this.a.endgame_state() !== "in_repository") {
+      this.println("Blasting requires dynamite.");
+      return true;
+    }
+    if (this.a.mark_rod_here()) {
+      this.println("There is a loud explosion, and you are suddenly splashed across the walls of the room.");
+      this.a.blast_klutz();
+    } else if (this.a.player_room() === 115) {
+      this.println("There is a loud explosion, and a twenty-foot hole appears in the far wall,");
+      this.println("burying the snakes in the rubble. A river of molten lava pours in, destroying everything — including you!");
+      this.a.blast_wrong_way();
+    } else {
+      this.println("There is a loud explosion, and a twenty-foot hole appears in the far wall,");
+      this.println("burying the dwarves in the rubble. You march through the hole and find");
+      this.println("yourself in the main office, where a cheering band of friendly elves carry");
+      this.println("the conquering adventurer off into the sunset.");
+      this.a.blast_mastery();
+    }
+    if (this.a.endgame_state() === "won") {
+      this.println("");
+      this.println("*** You have won Adventure! ***");
+    }
+    this.deadEnd = true; // all three in-repository blasts end the game
+    return true;
+  }
+
+  private doWake(): boolean {
+    if (this.a.endgame_state() !== "in_repository") {
+      this.println("I don't understand that.");
+      return true;
+    }
+    this.println("You prod the nearest dwarf, who wakes up grumpily, takes one look at you,");
+    this.println("curses, and grabs for his axe. The resulting ruckus has awakened the dwarves.");
+    this.println("Most of them throw knives at you! All of them get you!");
+    this.a.player.die();
+    this.checkPlayerDeath();
+    return true;
+  }
+
+  private doBack(): boolean {
+    const current: number = this.a.player_room();
+    const exits = ROOMS[current] ?? {};
+    if ("back" in exits) {
+      this.handleMovement("back");
+      return true;
+    }
+    let k: number = this.a.get_old_loc();
+    if (FORCED_ROOMS.includes(k)) k = this.a.get_old_loc2();
+    if (k < 0 || k === current) {
+      this.println("Sorry, but I no longer seem to remember how it was you got here.");
+      return true;
+    }
+    for (const dir of Object.keys(exits)) {
+      if (exits[dir] === k) {
+        this.handleMovement(dir);
+        return true;
+      }
+    }
+    this.println("You can't get there from here.");
+    return true;
   }
 
   private endTurn(): void {
