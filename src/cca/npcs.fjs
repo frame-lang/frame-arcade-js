@@ -9,8 +9,13 @@
 // bodies differ (JS): the seeded LCG PRNG used by Dwarf/Pirate/Chance
 // uses Math.imul + `>>> 0` for correct 32-bit wrapping (JS numbers are
 // doubles, not 64-bit ints), and GDScript Array/Dictionary become JS
-// array/object. @@[persist] + ": RefCounted" dropped.
+// array/object. The @@[persist]/@@[save]/@@[load] contract is kept
+// for save parity (JS blob type `string` vs Godot PackedByteArray);
+// only ": RefCounted" is dropped.
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@[main]
 @@system Bird {
 
@@ -69,6 +74,9 @@
         DRAGON_ROOM: int = 119
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Snake {
 
     interface:
@@ -91,6 +99,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Bear {
 
     interface:
@@ -145,6 +156,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Troll {
 
     interface:
@@ -172,6 +186,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Dwarf(seed: int) {
 
     interface:
@@ -318,6 +335,9 @@
         pick_step: int = 0
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Dragon {
 
     interface:
@@ -370,6 +390,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Pirate(seed: int = 42) {
 
     interface:
@@ -504,6 +527,9 @@
         pick_step: int = 0
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Chance(seed: int) {
 
     interface:

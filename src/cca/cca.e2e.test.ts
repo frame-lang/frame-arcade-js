@@ -5,7 +5,7 @@
 //
 // Uses driver.machine() to teleport (player.move_to) for setup and to inspect
 // FSM state; the verbs under test go through the real driver.input() path.
-import { CcaDriver } from "./driver";
+import { CcaDriver, SaveStore } from "./driver";
 
 declare const process: { exit(code: number): void };
 
@@ -106,6 +106,39 @@ console.log("=== CCA end-to-end integration (driver + topology + all FSMs) ===")
   ok("grate locked initially", a.grate_locked());
   run(d, "unlock grate");
   ok("grate unlocked with keys", a.grate_locked() === false);
+}
+
+// --- Save / restore round-trip (persistence parity; exercises cross-file
+//     composition persist via the RFC-0040 @@import path, end-to-end) ---
+{
+  function memStore(): SaveStore {
+    let v: string | null = null;
+    return { getItem: () => v, setItem: (_k, val) => { v = val; }, removeItem: () => { v = null; } };
+  }
+  const store = memStore();
+  const d = new CcaDriver(store);
+  d.start();
+  run(d, "east");        // -> well house (3)
+  run(d, "take lamp");
+  run(d, "on");
+  const roomBefore = d.room();
+  const litBefore = d.machine().is_lit();
+  ok("setup: well house (3), lamp lit", roomBefore === 3 && litBefore === true);
+  run(d, "save");
+
+  // fresh driver, same store -> load-on-boot restores the saved game
+  const d2 = new CcaDriver(store);
+  const boot = d2.start().join(" ").toLowerCase();
+  ok("load-on-boot restores room (Player child)", d2.room() === roomBefore);
+  ok("load-on-boot restores lamp lit (cross-file Lamp child)", d2.machine().is_lit() === litBefore);
+  ok("boot announces the restore", boot.includes("welcome back"));
+
+  // explicit RESTORE undoes a later move
+  d2.machine().player.move_to(11);
+  ok("moved away before restore", d2.room() === 11);
+  run(d2, "restore");
+  ok("RESTORE returns to saved room", d2.room() === roomBefore);
+  ok("RESTORE keeps lamp lit", d2.machine().is_lit() === litBefore);
 }
 
 console.log(fails === 0 ? "PASS — CCA e2e complete" : `FAIL — ${fails} failure(s)`);

@@ -5,7 +5,7 @@ export interface FrameMachine {
   current_state(): string;
 }
 
-/** A pluggable arcade entry: one Frame `.frm` + one Phaser scene. */
+/** A pluggable arcade entry: one Frame `.fjs` + one Phaser scene. */
 export interface GameDef {
   id: string;
   title: string;

@@ -13,7 +13,7 @@ const inputEl = document.getElementById("cmd") as HTMLInputElement;
 const vizEl = document.getElementById("viz")!;
 const scoreEl = document.getElementById("score");
 
-const driver = new CcaDriver();
+const driver = new CcaDriver(localStorage);
 const chart = new StateChart(vizEl, dot);
 
 // Up-arrow command history (session only).

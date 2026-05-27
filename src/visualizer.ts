@@ -4,7 +4,7 @@ import { instance } from "@viz-js/viz";
  * Renders a Frame state chart (Graphviz DOT from `framec -l graphviz`) as an
  * inline SVG and highlights the current state by name.
  *
- * This is the reusable core of the project: any game whose `.frm` produces a
+ * This is the reusable core of the project: any game whose `.fjs` produces a
  * DOT chart and whose machine exposes `current_state()` can drop this in.
  * Graphviz names each node by its state (e.g. `Rally`), and Frame's
  * `@@:system.state` returns that same string — so highlighting is a name match.

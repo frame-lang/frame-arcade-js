@@ -7,7 +7,7 @@
 // (AspectBus / LoudAspect / MuteAspect / LogAspect / Conductor),
 // states, and transitions. AspectBus is the reusable
 // registration+dispatch lifecycle ($Idle/$Dispatching); the others
-// are the end-to-end demo. The playable game (cca.frm) imports only
+// are the end-to-end demo. The playable game (cca.fjs) imports only
 // AspectBus; the demo aspects exist for parity + the standalone demo.
 //
 // Host-code adaptations (action bodies only, topology unaffected):
@@ -16,8 +16,13 @@
 // .begins_with()->.startsWith(); the sort_custom(func(a,b)...) lambda
 // becomes a manual selection sort (Frame reserves `=>` for HSM
 // forwarding, so an arrow function in a body would misparse).
-// @@[persist] + ": RefCounted" dropped.
+// The @@[persist]/@@[save]/@@[load] contract is kept for save parity
+// (JS blob type `string` vs Godot PackedByteArray); only ": RefCounted"
+// is dropped.
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system AspectBus {
 
     interface:
@@ -154,6 +159,9 @@
         pending_unregister: list = []
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system LoudAspect {
 
     interface:
@@ -178,6 +186,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system MuteAspect {
 
     interface:
@@ -199,6 +210,9 @@
         muted_count: int = 0
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system LogAspect {
 
     interface:
@@ -224,6 +238,9 @@
 }
 
 @@[main]
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Conductor {
 
     operations:

@@ -9,9 +9,13 @@
 // the Lamp $On HSM parent with $Bright/$Dim/$Out children, and the
 // parameterized Treasure(home_room,value,fragile) / Item(home_room).
 // Only action bodies differ (JS host code). The Godot
-// @@[persist]/@@[save]/@@[load] + ": RefCounted" are dropped (the JS
-// port serializes save/load host-side; dropping them is topology-neutral).
+// @@[persist]/@@[save]/@@[load] contract is kept for save/load parity;
+// the JS blob type is `string` (Godot uses PackedByteArray) and the
+// host stores the blob via localStorage. Only ": RefCounted" is dropped.
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@[main]
 @@system Lamp {
 
@@ -138,6 +142,9 @@
         last_warning: string = ""
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Treasure(home_room: int = 0, value: int = 0, fragile: bool = false) {
 
     interface:
@@ -293,6 +300,9 @@
         DEPOSIT_ROOM: int = 3
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Item(home_room: int = -1) {
 
     interface:
@@ -376,6 +386,9 @@
         location: int = home_room
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system EggsIncantation {
 
     interface:
@@ -431,6 +444,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system CrystalBridge {
 
     interface:
@@ -458,6 +474,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Grate {
 
     interface:
@@ -491,6 +510,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system RustyDoor {
 
     interface:
@@ -525,6 +547,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system VendingMachine {
 
     interface:
@@ -554,6 +579,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Bottle {
 
     interface:
@@ -628,6 +656,9 @@
         }
 }
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Plant {
 
     interface:

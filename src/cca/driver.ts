@@ -23,10 +23,10 @@ const ID = {
  * the FSM's gate-guard queries, pass everything else to do_command, and
  * run the per-turn chain (tick + lamp warnings + reprint on move).
  *
- * MINIMAL CUT (Phase 5a): movement, look, take/drop, lamp, magic words,
- * score, help. Deferred to Phase 6: the 17 special-case intercepts,
- * dwarf/pirate stepping, dark-pit hazard, modal prompts (quit/suspend/
- * oyster/revive/hint), save/load, brief mode, bumper-chain gates.
+ * Includes movement, look, take/drop, lamp, magic words, score, help, the
+ * special-case verb intercepts, dwarf/pirate stepping, the dark-pit hazard,
+ * modal Y/N prompts (quit/revive), brief mode, and SAVE/RESTORE persistence
+ * (Adventure.save_state() + the session PromptDispatcher, via a SaveStore).
  */
 
 // Verb synonyms (ported from driver.gd verb_synonyms) — canonical-form lookup.
@@ -40,6 +40,8 @@ const VERB_SYNONYMS: Record<string, string> = {
   y: "yes",
   score: "score", help: "help", "?": "help", info: "info",
   look: "look", inventory: "inventory",
+  save: "save", suspend: "save",
+  load: "load", restore: "load",
 };
 
 const DIRECTIONS = ["north", "south", "east", "west", "up", "down", "in", "out", "enter"];
@@ -61,6 +63,20 @@ function truncate5(s: string): string {
   return s.length > 5 ? s.substring(0, 5) : s;
 }
 
+// localStorage key for the single CCA save slot.
+const SAVE_KEY = "cca.save";
+
+/**
+ * Minimal Web-Storage-shaped sink so the driver stays headless: the browser
+ * page passes the real `localStorage`; node tests pass an in-memory stub;
+ * omitting it disables persistence (SAVE/RESTORE report "not available").
+ */
+export interface SaveStore {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
 export class CcaDriver {
   // The Adventure FSM is untyped (generated .machine.js). `any` is intentional.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -73,8 +89,11 @@ export class CcaDriver {
   private lastRoom = -1;
   private deadEnd = false;
   private syn5: Record<string, string> = {};
+  // Persistence sink (browser: localStorage; tests: in-memory; null: disabled).
+  private store: SaveStore | null;
 
-  constructor() {
+  constructor(store?: SaveStore) {
+    this.store = store ?? null;
     this.a = Adventure._create();
     this.a.setup_default_aspects();
     this.a.wake_dwarves(); // canon: dwarves wake at game start, wandering the deep cave
@@ -85,6 +104,15 @@ export class CcaDriver {
   /** Initial render — call once after construction. */
   start(): string[] {
     this.out = [];
+    // Load-on-boot: resume an autosaved game (but not a finished one — a reload
+    // after death/victory starts fresh rather than restoring "the game is over").
+    const saved = this.store ? this.store.getItem(SAVE_KEY) : null;
+    if (saved && this.restoreSnapshot(saved, true)) {
+      this.println("Welcome back to Adventure!  (your saved game was restored — SAVE/RESTORE anytime)");
+      this.println("");
+      this.printRoom();
+      return this.drain();
+    }
     this.println("Welcome to Adventure!  (Crowther & Woods, 1977 — Frame port)");
     this.println("");
     this.printRoom();
@@ -95,6 +123,7 @@ export class CcaDriver {
   input(text: string): string[] {
     this.out = [];
     this.processInput(text);
+    this.autosave();
     return this.drain();
   }
 
@@ -116,6 +145,51 @@ export class CcaDriver {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   machine(): any {
     return this.a;
+  }
+
+  // ---- save / load (localStorage-backed; headless via SaveStore) ----
+
+  // Full session snapshot: the Adventure world (recurses over every composed
+  // @@system) + the driver-owned PromptDispatcher + the two driver scalars.
+  // save_state() is safe here — the FSMs are quiescent between turns.
+  private snapshot(): string {
+    return JSON.stringify({
+      v: 1,
+      a: this.a.save_state(),
+      p: this.prompts.save_state(),
+      lastRoom: this.lastRoom,
+      deadEnd: this.deadEnd,
+    });
+  }
+
+  // Restore from a snapshot string. onBoot refuses a finished game so a reload
+  // after death/victory starts fresh. Returns false on a corrupt/old blob.
+  private restoreSnapshot(blob: string, onBoot: boolean): boolean {
+    let env: { v?: number; a?: string; p?: string; lastRoom?: number; deadEnd?: boolean };
+    try {
+      env = JSON.parse(blob);
+    } catch {
+      return false;
+    }
+    if (!env || env.v !== 1 || typeof env.a !== "string" || typeof env.p !== "string") return false;
+    if (onBoot && env.deadEnd) return false;
+    this.a.restore_state(env.a);
+    this.prompts.restore_state(env.p);
+    this.lastRoom = -1; // force the next printRoom to render
+    this.deadEnd = !!env.deadEnd;
+    return true;
+  }
+
+  // Autosave after every turn. A finished game clears the slot instead (so a
+  // reload starts fresh). Storage errors (quota/blocked) are non-fatal.
+  private autosave(): void {
+    if (!this.store) return;
+    try {
+      if (this.deadEnd) this.store.removeItem(SAVE_KEY);
+      else this.store.setItem(SAVE_KEY, this.snapshot());
+    } catch {
+      /* storage full or blocked — keep playing without persistence */
+    }
   }
 
   // ---- internals ----
@@ -440,7 +514,7 @@ export class CcaDriver {
       case "help":
         this.println("Commands: LOOK · compass N/S/E/W/U/D (also IN/OUT/ENTER) · TAKE/DROP <obj> ·");
         this.println("ON/OFF (lamp) · INVENTORY (I) · SCORE · XYZZY/PLUGH/PLOVER · HINT · BACK ·");
-        this.println("BRIEF · QUIT. Many canon verbs work too (ATTACK, FEED, THROW, WAVE, FILL …).");
+        this.println("BRIEF · SAVE/RESTORE · QUIT. Many canon verbs work too (ATTACK, FEED, THROW …).");
         return true;
       case "info":
         this.println("A faithful Frame-state-machine port of Colossal Cave Adventure (Crowther & Woods, 1977).");
@@ -471,6 +545,36 @@ export class CcaDriver {
         this.println(this.a.request_hint(noun !== "" ? noun : "bird"));
         this.afterTurn();
         return true;
+      case "save":
+        if (!this.store) {
+          this.println("Saving isn't available in this session.");
+          return true;
+        }
+        try {
+          this.store.setItem(SAVE_KEY, this.snapshot());
+          this.println("Your game has been saved. (It also autosaves each turn; use RESTORE to resume.)");
+        } catch {
+          this.println("I couldn't save your game (storage is full or blocked).");
+        }
+        return true;
+      case "load": {
+        if (!this.store) {
+          this.println("Restoring isn't available in this session.");
+          return true;
+        }
+        const blob = this.store.getItem(SAVE_KEY);
+        if (!blob) {
+          this.println("There is no saved game to restore.");
+          return true;
+        }
+        if (this.restoreSnapshot(blob, false)) {
+          this.println("Your saved game has been restored.");
+          this.printRoom();
+        } else {
+          this.println("Your saved game appears to be corrupted; it could not be restored.");
+        }
+        return true;
+      }
       case "hours":
         this.println("Colossal Cave is open all day, every day.");
         return true;

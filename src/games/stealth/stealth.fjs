@@ -12,8 +12,8 @@
 // push$/pop$ pause. Only action bodies differ (JS): Vector2
 // becomes a plain {x, y} object, distance_to becomes Math.hypot,
 // Array becomes list. The Godot @@[persist]/@@[save]/@@[load]
-// attributes are dropped here (no save system in the JS arcade);
-// dropping them leaves the topology unchanged.
+// contract is kept for save parity (JS blob type `string` vs Godot
+// PackedByteArray); only ": RefCounted" is dropped.
 //
 // WHAT FRAME OWNS vs WHAT THE DRIVER OWNS (same split as Godot):
 // Frame owns each guard's mind — its mode, timers, last-known
@@ -23,6 +23,9 @@
 // driver perceives ("can guard i see the player?") and reports
 // facts back via spot_player; the Frame side reacts.
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Guard {
 
     interface:
@@ -207,6 +210,9 @@
 }
 
 @@[main]
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Stealth {
 
     operations:

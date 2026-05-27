@@ -2,11 +2,31 @@
 
 // CCA core + Adventure orchestrator. CANONICAL: mirrors
 // frame-arcade/cca/frame/cca.fgd exactly. Only action bodies differ (JS).
+// @@[persist]/@@[save]/@@[load] kept for save parity: Adventure's
+// save_state recurses over every composed @@system (npcs/puzzles/aspects
+// each carry their own @@[persist]); JS blob type is `string` (Godot uses
+// PackedByteArray), stored host-side via localStorage. Only ": RefCounted"
+// is dropped. Persist ops are snake_case (save_state/restore_state),
+// mirroring the Godot canon. So Adventure can call its cross-file composed
+// children by those declared names (not the camelCase target default), the
+// imported sources are made visible via analysis-only @@import directives
+// below — RFC-0040; requires framec >= 4.3.0.
 
 import { Bird, Snake, Bear, Troll, Dwarf, Dragon, Pirate, Chance } from "./npcs.machine.js"
 import { Lamp, Treasure, Item, EggsIncantation, CrystalBridge, Grate, RustyDoor, VendingMachine, Bottle, Plant } from "./puzzles.machine.js"
 import { AspectBus } from "./aspects.machine.js"
 
+// Analysis-only cross-file resolution (RFC-0040, framec >= 4.3.0): framec reads
+// these Frame sources so it can resolve each imported child's declared
+// @@[save]/@@[load] names when generating Adventure's save_state. Emits nothing
+// — the native ES imports above are the runtime linkage.
+@@import "./npcs.fjs"
+@@import "./puzzles.fjs"
+@@import "./aspects.fjs"
+
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Player {
 
     interface:
@@ -128,6 +148,9 @@ import { AspectBus } from "./aspects.machine.js"
 }
 
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system DarknessGate {
 
     interface:
@@ -174,6 +197,9 @@ import { AspectBus } from "./aspects.machine.js"
 }
 
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system BackpackLimit {
 
     interface:
@@ -203,6 +229,9 @@ import { AspectBus } from "./aspects.machine.js"
 }
 
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system MagicWordTeleport {
 
     interface:
@@ -262,6 +291,9 @@ import { AspectBus } from "./aspects.machine.js"
 }
 
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Endgame {
 
     interface:
@@ -486,6 +518,9 @@ import { AspectBus } from "./aspects.machine.js"
 }
 
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Hint(threshold: int = 5) {
 
     interface:
@@ -560,6 +595,9 @@ import { AspectBus } from "./aspects.machine.js"
 }
 
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system ScoreLedger {
 
     interface:
@@ -593,6 +631,9 @@ import { AspectBus } from "./aspects.machine.js"
 }
 
 
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system PromptDispatcher {
 
     interface:
@@ -696,6 +737,9 @@ import { AspectBus } from "./aspects.machine.js"
 
 
 @@[main]
+@@[persist(string)]
+@@[save(save_state)]
+@@[load(restore_state)]
 @@system Adventure {
 
     operations:
