@@ -7,8 +7,11 @@
 // (Bird / Snake / Bear / Troll / Dwarf(seed) / Dragon /
 // Pirate(seed) / Chance(seed)), states, and transitions. Only action
 // bodies differ (JS): the seeded LCG PRNG used by Dwarf/Pirate/Chance
-// uses Math.imul + `>>> 0` for correct 32-bit wrapping (JS numbers are
-// doubles, not 64-bit ints), and GDScript Array/Dictionary become JS
+// uses BigInt to reproduce GDScript's signed-64-bit int arithmetic
+// bit-for-bit (JS numbers are doubles and JS bitwise ops truncate to
+// 32 bits, so the rolls would otherwise diverge from Godot once the
+// unmasked LCG intermediate overflows 32 bits — see Dwarf.attack()),
+// and GDScript Array/Dictionary become JS
 // array/object. The @@[persist]/@@[save]/@@[load] contract is kept
 // for save parity (JS blob type `string` vs Godot PackedByteArray);
 // only ": RefCounted" is dropped.
@@ -235,8 +238,19 @@
         $Stalking {
             attack() {
                 this.step = this.step + 1
-                let x = (Math.imul(this.seed, 1664525) + Math.imul(this.step, 1013904223)) >>> 0
-                x = Math.imul((x >>> 16) ^ x, 22695477) >>> 0
+                // 64-bit-faithful LCG (matches Godot's GDScript int64 math).
+                // GDScript computes `seed*A + step*B` and `((x>>16)^x)*C` in
+                // signed 64-bit and masks to 32 bits only at the very end. The
+                // earlier Math.imul/`>>>0` port truncated to 32 bits at EACH
+                // step, which agrees with Godot only while `seed*A + step*B`
+                // stays under 2^32 — i.e. it diverges from Godot the moment the
+                // unmasked intermediate overflows 32 bits (for seed=42 that is
+                // step >= 5). BigInt reproduces the int64 stream bit-for-bit;
+                // taking the low 32 bits at the end matches Godot's `& 0xffffffff`
+                // exactly (modular multiply preserves low bits across the wrap).
+                let bx = BigInt(this.seed) * 1664525n + BigInt(this.step) * 1013904223n
+                bx = ((bx >> 16n) ^ bx) * 22695477n
+                let x = Number(bx & 0xffffffffn)
                 let roll = x % 100
                 if (roll < 70) {
                     -> $Dead
@@ -244,8 +258,10 @@
             }
             try_throw_axe(anger: int): bool {
                 this.attack_step = this.attack_step + 1
-                let x = (Math.imul(this.seed, 22695477) + Math.imul(this.attack_step, 1664525)) >>> 0
-                x = Math.imul((x >>> 16) ^ x, 1013904223) >>> 0
+                // 64-bit-faithful LCG — see attack() above for the rationale.
+                let bx = BigInt(this.seed) * 22695477n + BigInt(this.attack_step) * 1664525n
+                bx = ((bx >> 16n) ^ bx) * 1013904223n
+                let x = Number(bx & 0xffffffffn)
                 let roll = x % 100
                 let hit_pct = 0
                 if (anger > 2) {
@@ -293,9 +309,10 @@
                     @@:return(this.prev_room)
                 }
                 this.pick_step = this.pick_step + 1
-                let y = (Math.imul(this.seed, 134775813) + Math.imul(this.pick_step, 22695477)) >>> 0
-                y = Math.imul((y >>> 16) ^ y, 1664525) >>> 0
-                let idx = y % filtered.length
+                // 64-bit-faithful LCG — see attack() above for the rationale.
+                let by = BigInt(this.seed) * 134775813n + BigInt(this.pick_step) * 22695477n
+                by = ((by >> 16n) ^ by) * 1664525n
+                let idx = Number(by & 0xffffffffn) % filtered.length
                 @@:(filtered[idx])
             }
             get_state(): string      { @@:("stalking") }
@@ -439,8 +456,10 @@
             }
             try_steal(): bool {
                 this.step = this.step + 1
-                let x = (Math.imul(this.seed, 1664525) + Math.imul(this.step, 1013904223)) >>> 0
-                x = Math.imul((x >>> 16) ^ x, 22695477) >>> 0
+                // 64-bit-faithful LCG — see Dwarf.attack() for the rationale.
+                let bx = BigInt(this.seed) * 1664525n + BigInt(this.step) * 1013904223n
+                bx = ((bx >> 16n) ^ bx) * 22695477n
+                let x = Number(bx & 0xffffffffn)
                 let roll = x % 100
                 if (roll < 25) {
                     -> $Vanished
@@ -485,9 +504,10 @@
                     @@:return(this.prev_room)
                 }
                 this.pick_step = this.pick_step + 1
-                let y = (Math.imul(this.seed, 134775813) + Math.imul(this.pick_step, 22695477)) >>> 0
-                y = Math.imul((y >>> 16) ^ y, 1664525) >>> 0
-                let idx = y % filtered.length
+                // 64-bit-faithful LCG — see Dwarf.attack() for the rationale.
+                let by = BigInt(this.seed) * 134775813n + BigInt(this.pick_step) * 22695477n
+                by = ((by >> 16n) ^ by) * 1664525n
+                let idx = Number(by & 0xffffffffn) % filtered.length
                 @@:(filtered[idx])
             }
             get_room(): int      { @@:(this.room) }
@@ -548,8 +568,10 @@
                     @@:return(this.forced[name] != 0)
                 }
                 this.step = this.step + 1
-                let x = (Math.imul(this.seed, 1664525) + Math.imul(this.step, 1013904223)) >>> 0
-                x = Math.imul((x >>> 16) ^ x, 22695477) >>> 0
+                // 64-bit-faithful LCG — see Dwarf.attack() for the rationale.
+                let bx = BigInt(this.seed) * 1664525n + BigInt(this.step) * 1013904223n
+                bx = ((bx >> 16n) ^ bx) * 22695477n
+                let x = Number(bx & 0xffffffffn)
                 let roll = x % 100
                 @@:(roll < pct)
             }
@@ -558,8 +580,10 @@
                     @@:return(this.forced[name])
                 }
                 this.step = this.step + 1
-                let x = (Math.imul(this.seed, 1664525) + Math.imul(this.step, 1013904223)) >>> 0
-                x = Math.imul((x >>> 16) ^ x, 22695477) >>> 0
+                // 64-bit-faithful LCG — see Dwarf.attack() for the rationale.
+                let bx = BigInt(this.seed) * 1664525n + BigInt(this.step) * 1013904223n
+                bx = ((bx >> 16n) ^ bx) * 22695477n
+                let x = Number(bx & 0xffffffffn)
                 @@:(x % n)
             }
             force(name: string, value: int) {

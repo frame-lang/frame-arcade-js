@@ -13,7 +13,7 @@ const inputEl = document.getElementById("cmd") as HTMLInputElement;
 const vizEl = document.getElementById("viz")!;
 const scoreEl = document.getElementById("score");
 
-const driver = new CcaDriver(localStorage);
+const driver = new CcaDriver(localStorage, true); // interactive session: latch deadEnd on canon end-of-run
 const chart = new StateChart(vizEl, dot);
 
 // Up-arrow command history (session only).

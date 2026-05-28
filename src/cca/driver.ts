@@ -1,5 +1,5 @@
 import { Adventure, PromptDispatcher } from "./cca.machine.js";
-import { ROOMS, GATES } from "./topology";
+import { ROOMS, GATES, type GateStep } from "./topology";
 
 // Canon object ids (ported from driver.gd constants), for inventory.
 const ID = {
@@ -42,6 +42,8 @@ const VERB_SYNONYMS: Record<string, string> = {
   look: "look", inventory: "inventory",
   save: "save", suspend: "save",
   load: "load", restore: "load",
+  detonate: "blast",
+  retreat: "back",
 };
 
 const DIRECTIONS = ["north", "south", "east", "west", "up", "down", "in", "out", "enter"];
@@ -86,17 +88,35 @@ export class CcaDriver {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private prompts: any;
   private out: string[] = [];
+  // Persistent capture accumulator — the JS counterpart to Godot's
+  // _test_helpers.CapturedDriver.captured. Every println appends here (in
+  // addition to the per-turn `out`), so harness tests that drive internal
+  // per-turn checks (checkPirateRustle/checkDarkPitHazard) directly can read the
+  // accumulated lines and slice by offset, exactly as the Godot tests do.
+  readonly captured: string[] = [];
   private lastRoom = -1;
   private deadEnd = false;
   private syn5: Record<string, string> = {};
   // Persistence sink (browser: localStorage; tests: in-memory; null: disabled).
   private store: SaveStore | null;
+  // Last-seen endgame phase, so each transition emits its canon prose once.
+  private lastEndgameState = "";
+  // Live interactive session (the browser game) vs a headless harness. The JS
+  // counterpart to Godot's is_inside_tree(): canon end-of-run points (lamp dead
+  // aboveground, etc.) still PRINT their prose either way, but only an
+  // interactive session latches deadEnd to stop accepting input — exactly as the
+  // Godot driver only calls get_tree().quit() when in the scene tree, so its
+  // headless tests print the message and keep playing.
+  private interactive: boolean;
 
-  constructor(store?: SaveStore) {
+  constructor(store?: SaveStore, interactive = false) {
     this.store = store ?? null;
+    this.interactive = interactive;
     this.a = Adventure._create();
     this.a.setup_default_aspects();
-    this.a.wake_dwarves(); // canon: dwarves wake at game start, wandering the deep cave
+    // Dwarves wake at game start — deferred to start() (the game-init path) so
+    // FSM/driver tests can construct a dormant world, mirroring the Godot test
+    // helper's raw `Cca.new()` (which never runs the wake path).
     this.prompts = PromptDispatcher._create();
     this.buildSyn5();
   }
@@ -113,6 +133,7 @@ export class CcaDriver {
       this.printRoom();
       return this.drain();
     }
+    this.a.wake_dwarves(); // canon: dwarves wake at game start, wandering the deep cave
     this.println("Welcome to Adventure!  (Crowther & Woods, 1977 — Frame port)");
     this.println("");
     this.printRoom();
@@ -122,6 +143,14 @@ export class CcaDriver {
   /** Process one line of player input; returns the lines to display. */
   input(text: string): string[] {
     this.out = [];
+    // Canon WEST counter (advent.for line 901): the literal word "west" (not "w")
+    // bumps a counter; the 10th fires canon msg #17 once. Counted on raw input
+    // before synonym normalization, as Godot does.
+    const rawFirst = text.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (rawFirst === "west") {
+      this.a.bump_iwest();
+      if (this.a.get_iwest_count() === 10) this.println("If you prefer, simply type W rather than WEST.");
+    }
     this.processInput(text);
     this.autosave();
     return this.drain();
@@ -145,6 +174,41 @@ export class CcaDriver {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   machine(): any {
     return this.a;
+  }
+
+  /** Debug/test hook: the session PromptDispatcher (modal Y/N prompt state). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  promptMachine(): any {
+    return this.prompts;
+  }
+
+  /**
+   * Test hook: render the current room and return the lines it emitted. Mirrors
+   * the Godot CapDriver pattern (clear log → _print_room() → read log) used by
+   * the Y2-whisper stochastic probe. Calls the same printRoom() that carries the
+   * room-33 y2_whisper roll, so the probe samples that gate exactly as Godot.
+   */
+  captureRoomRender(): string[] {
+    this.out = [];
+    this.printRoom();
+    return this.drain();
+  }
+
+  /**
+   * Test/harness hook: restore the Adventure world from save_state() bytes and
+   * reset the driver's per-session state, mirroring the Godot harness pattern
+   * (`d.fsm.restore_state(bytes); d.prompts = PromptDispatcher.new()`). Used by
+   * the completability / death / restore-soundness rails that branch off saved
+   * milestone snapshots. Re-offers the revive prompt if the restored player is
+   * dead (the modal-prompt state doesn't survive the save boundary; the driver
+   * re-derives it from world state, exactly as the Godot tests do).
+   */
+  restoreFsmState(blob: string): void {
+    this.a.restore_state(blob);
+    this.prompts = PromptDispatcher._create();
+    this.lastRoom = -1; // force the next printRoom to render
+    this.deadEnd = false; // the restored world is the source of truth
+    if (this.a.player_state() === "dead") this.prompts.offer_revive();
   }
 
   // ---- save / load (localStorage-backed; headless via SaveStore) ----
@@ -200,18 +264,33 @@ export class CcaDriver {
     return o;
   }
   private println(s: string): void {
-    this.out.push(this.stripBBCode(s));
+    const stripped = this.stripBBCode(s);
+    this.out.push(stripped);
+    this.captured.push(stripped);
   }
   private stripBBCode(s: string): string {
     return s.replace(/\[\/?[a-z][^\]]*\]/gi, "");
   }
 
   private buildSyn5(): void {
+    // Base layer: every ROOMS exit + GATES verb must restore from its 5-char
+    // truncation to the full key those tables use. Canon truncates player input
+    // to 5 letters, but the topology tables are keyed by the full motion word
+    // (e.g. "depression", "bedquilt", "oriental"). Without this, a typed
+    // "depression" truncates to "depre" and never matches ROOMS["depression"].
+    for (const room of Object.values(ROOMS)) {
+      for (const dir of Object.keys(room)) this.syn5[truncate5(dir)] = dir;
+    }
+    for (const gateKey of Object.keys(GATES)) {
+      const dir = gateKey.split(":")[1];
+      if (dir) this.syn5[truncate5(dir)] = dir;
+    }
+    // Curated synonyms (override the base on any 5-char collision).
     for (const key of Object.keys(VERB_SYNONYMS)) {
       this.syn5[truncate5(key)] = VERB_SYNONYMS[key];
     }
-    // Identity mappings for canonical verbs > 5 chars whose truncated form
-    // must restore (so gate keys / FSM checks match the full word).
+    // Identity mappings for canonical non-motion verbs > 5 chars whose truncated
+    // form must restore (so FSM verb checks match the full word).
     const canon = [
       "extinguish", "release", "attack", "examine", "unlock", "insert", "plover",
       "inventory", "passage", "forward", "stream", "across", "stairs", "building",
@@ -263,6 +342,13 @@ export class CcaDriver {
         } else if (promptName === "quit") {
           this.println("Goodbye.");
           this.deadEnd = true;
+        } else if (promptName === "oyster") {
+          // Canon msg #193 — read it, pay the 10-point hint cost (advent.for SPK 192/193).
+          this.a.mark_oyster_revealed();
+          this.println(`It says, "There is something strange about this place, such that one`);
+          this.println(`of the words I've always known now has a new effect."`);
+          this.a.score_hints -= 10;
+          this.a.real_score -= 10;
         }
         return;
       } else if (verb === "no") {
@@ -272,6 +358,8 @@ export class CcaDriver {
           this.deadEnd = true;
         } else if (promptName === "quit") {
           this.println("OK.");
+        } else if (promptName === "oyster") {
+          this.println("OK."); // canon msg #194 (declined) — no penalty
         }
         return;
       } else if (this.prompts.accepts_only_yes_no()) {
@@ -293,6 +381,12 @@ export class CcaDriver {
     if (MOTION_VERBS.includes(verb) && this.checkDarkPitHazard()) return this.endTurn();
     if (this.iEnterStream(verb, noun)) return this.endTurn();
 
+    // Canon bumper / chain gates (probability, bridge/dragon/chasm dest-walks,
+    // always-msgs) keyed on room:verb, for any verb — mirrors Godot's
+    // _dispatch_bumper running before movement/FSM dispatch. A dest-walk runs its
+    // own per-turn upkeep; a msg-only block stays put (no turn), as a gate block does.
+    if (this.dispatchBumper(verb)) return;
+
     const room = this.a.player_room();
     const exits = ROOMS[room] ?? {};
     if (DIRECTIONS.includes(verb)) {
@@ -308,6 +402,7 @@ export class CcaDriver {
     if (this.iTakeBear(verb, noun)) return this.endTurn();
     if (this.iUnlockChain(verb, noun)) return this.endTurn();
     if (this.iTakeScenery(verb, noun)) return this.endTurn();
+    if (this.iReadOyster(verb, noun)) return; // arms a Y/N prompt; no turn
     if (this.iThrowAxe(verb, noun)) return this.endTurn();
     this.iPloverEmerald(verb, noun); // side-effect; falls through to FSM PLOVER
 
@@ -321,6 +416,13 @@ export class CcaDriver {
       return;
     }
 
+    // Canon LOOK (advent.for STMT 30): msg #15 the first 3 times, before the FSM
+    // re-displays the room (the FSM look still respects DarknessGate / brief mode,
+    // and the per-turn chain below still runs — e.g. dwarf-in-room messages).
+    if (verb === "look" && this.a.get_look_detail_count() < 3) {
+      this.println("Sorry, but I am not allowed to give more detail. I will repeat the long description of your location.");
+      this.a.bump_look_detail();
+    }
     // Everything else → the FSM verb dispatcher (handles look/take/drop/etc.,
     // and the magic-word aspect transforms xyzzy/plugh/plover into moves).
     this.dispatchToFsm(verb, noun);
@@ -389,8 +491,64 @@ export class CcaDriver {
       case "plover_squeeze": return this.a.plover_squeeze_blocked();
       case "rusty": return !this.a.rusty_door_oiled();
       case "always": return true;
-      default: return false; // carrying / pct chains deferred
+      default: return false; // probability/carrying/dragon_killed/chasm handled by dispatchBumper
     }
+  }
+
+  // ---- canon bumper / chain gate dispatch (mirrors Godot driver
+  //      _dispatch_bumper / _try_bumper_rule / _walk_to_dest) ----
+
+  // GATES[room:verb] may be a single rule or an ordered chain; walk in canon
+  // order, the first rule that fires wins. Returns true if a rule fired.
+  private dispatchBumper(verb: string): boolean {
+    const entry = GATES[`${this.a.player_room()}:${verb}`];
+    if (entry === undefined) return false;
+    const rules: GateStep[] = Array.isArray(entry) ? entry : [entry];
+    for (const rule of rules) {
+      if (this.tryBumperRule(rule)) return true;
+    }
+    return false;
+  }
+
+  // Evaluate one chain rule. `dest` → walk there (the destination room's entry
+  // handler fires, e.g. canon 21 death); `msg` → print and stay put. Checks not
+  // handled here (troll/grate/plant_*/plover_squeeze) fall through to
+  // handleMovement's topology-stage gate. Public for the 19:sw-chain harness
+  // test, which drives a single probability rule directly (mirrors Godot
+  // driver._try_bumper_rule).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tryBumperRule(bg: GateStep): boolean {
+    const resolve = (): boolean => {
+      if (bg.dest !== undefined) this.walkToDest(bg.dest);
+      else if (bg.msg) this.println(bg.msg);
+      return true;
+    };
+    switch (bg.check) {
+      case "always":
+        this.println(bg.msg ?? "");
+        return true;
+      case "rusty": return this.a.rusty_door_oiled() ? false : resolve();
+      case "snake": return this.a.snake_state() === "blocking" ? resolve() : false;
+      case "probability": return this.a.chance.decide("travel_gate", bg.pct ?? 0) ? resolve() : false;
+      case "carrying": {
+        const oid = bg.obj && bg.obj in this.a ? Number(this.a[bg.obj]) : -1;
+        return oid > 0 && this.a.player.carrying(oid) ? resolve() : false;
+      }
+      case "bridge": return this.a.bridge_built() ? false : resolve();
+      case "dragon_killed": return this.a.dragon_alive() ? false : resolve();
+      case "chasm_collapsed": return this.a.troll_bridge_collapsed() ? resolve() : false;
+      default: return false;
+    }
+  }
+
+  // Walk the player to dest via the FSM move so the destination room's entry
+  // handler fires (e.g. canon 21 death), then run per-turn upkeep.
+  private walkToDest(dest: number): void {
+    this.a.set_old_loc2(this.a.get_old_loc());
+    this.a.set_old_loc(this.a.player_room());
+    const response: string = this.a.do_command("move", String(dest));
+    if (response !== "") this.println(response);
+    this.afterTurn(true);
   }
 
   private dispatchToFsm(verb: string, noun: string): void {
@@ -412,7 +570,14 @@ export class CcaDriver {
     this.checkPirateSteal();
     const warn: string = this.a.lamp_warning_text();
     if (warn && warn !== "") this.println(warn);
+    // Canon msg #185 (advent.for STMT 12600): lamp dead + aboveground → end the run.
+    if (this.a.lamp_out_aboveground()) {
+      this.println("There's not much point in wandering around out here, and you can't explore the cave without a lamp. So let's just call it a day.");
+      if (this.interactive) this.deadEnd = true; // is_inside_tree() gate — headless harness keeps playing
+    }
+    this.checkEndgamePhaseChange();
     this.checkDwarfAxe();
+    this.checkChestHint();
     this.checkPlayerDeath();
     const st: string = this.a.player_state();
     if (st !== "dead" && st !== "permadead" && (this.a.player_room() !== this.lastRoom || moved)) {
@@ -424,6 +589,13 @@ export class CcaDriver {
     this.lastRoom = this.a.player_room();
     const desc: string = this.a.do_command("look", "");
     this.println(desc);
+    // Canon Y2 whisper (advent.for line 808): at canon room 33, 25% chance per
+    // room render to print msg #8. Doesn't fire during the cave-closing phase.
+    // Rolled here (last in the turn) so the shared chance stream advances in the
+    // same order as Godot's _print_room (travel_gate → pirate_rustle → y2_whisper).
+    if (this.lastRoom === 33 && !this.a.endgame_closing() && this.a.chance.decide("y2_whisper", 25)) {
+      this.println('A hollow voice says "PLUGH".');
+    }
   }
 
   private checkPlayerDeath(): void {
@@ -770,6 +942,48 @@ export class CcaDriver {
     else this.println(`${stick} of them get you!`);
   }
 
+  // Canon endgame phase-change prose (advent.for): the sepulchral closing
+  // announcement (msg #129), the closing crescendo at timer 25/15/5, the
+  // cave-closed/repository prose (msg #132), and the victory line. Per-turn,
+  // mirrors Godot driver _check_endgame_phase_change.
+  private checkEndgamePhaseChange(): void {
+    const s: string = this.a.endgame_state();
+    if (s !== this.lastEndgameState) {
+      this.lastEndgameState = s;
+      if (s === "closing") {
+        this.println('A sepulchral voice reverberating through the cave, says, "Cave closing soon. All adventurers exit immediately through main office."');
+      } else if (s === "in_repository") {
+        this.println('The sepulchral voice entones, "The cave is now closed." As the echoes fade, there is a blinding flash of light (and a small puff of orange smoke). . . . As your eyes refocus, you look around and find...');
+        this.println("(Try DETONATE.)");
+      } else if (s === "won") {
+        this.println(`There is a loud explosion, and a twenty-foot hole appears in the far wall, burying the dwarves in the rubble. You march through the hole and find yourself in the main office, where a cheering band of friendly elves carry the conquering adventurer off into the sunset. (Final score: ${this.a.score()})`);
+      }
+    }
+    const w: number = this.a.pending_warning_threshold();
+    if (w === 25 || w === 15) {
+      this.println('A sepulchral voice reverberating through the cave, says, "Cave closing soon. All adventurers exit immediately through main office."');
+      this.a.clear_pending_warning();
+    } else if (w === 5) {
+      this.println('A mysterious recorded voice groans into life and announces: "This exit is closed. Please leave via main office."');
+      this.a.clear_pending_warning();
+    }
+  }
+
+  // Canon msg #186 — fires once when 14/15 treasures are deposited and the chest
+  // is still out in the world (points the player to the pirate's maze). Per-turn.
+  private checkChestHint(): void {
+    if (this.a.is_chest_hint_done()) return;
+    if (this.a.chest.is_deposited()) return;
+    if (this.a.player.carrying(this.a.CHEST_ID)) return;
+    if (this.a.treasures_deposited() < 14) return;
+    this.a.mark_chest_hint_done();
+    this.println("There are faint rustling noises from the darkness behind you. As you");
+    this.println("turn toward them, the beam of your lamp falls across a bearded pirate.");
+    this.println(`He is carrying a large chest. "Shiver me timbers!" he cries, "I've`);
+    this.println(`been spotted! I'd best hie meself off to the maze to hide me chest!"`);
+    this.println("With that, he vanishes into the gloom.");
+  }
+
   private checkPirateSteal(): void {
     if (this.a.pirate_state() !== "stalking") return;
     const msg: string = this.a.pirate_attempt_steal();
@@ -780,7 +994,9 @@ export class CcaDriver {
     this.checkPirateRustle();
   }
 
-  private checkPirateRustle(): void {
+  // Public for the pirate-rustling harness test, which drives it directly in a
+  // loop (mirrors Godot driver._check_pirate_rustle).
+  checkPirateRustle(): void {
     if (this.a.pirate_state() !== "stalking") return;
     if (this.a.player_room() < 15) return;
     if (this.a.chance.decide("pirate_rustle", 20)) {
@@ -790,7 +1006,9 @@ export class CcaDriver {
 
   // Canon dark-room pit-fall: one free "pitch dark" warning per room, then a
   // 35% pit-fall roll on subsequent move attempts. Returns true to block.
-  private checkDarkPitHazard(): boolean {
+  // Public for the dark-pit-fall harness test, which drives it directly
+  // (mirrors Godot driver._check_dark_pit_hazard).
+  checkDarkPitHazard(): boolean {
     if (!this.a.room_is_dark_now()) {
       if (this.a.dark_warned_room() !== -1) this.a.clear_dark_warning();
       return false;
@@ -918,6 +1136,24 @@ export class CcaDriver {
       return true;
     }
     return false;
+  }
+
+  // Canon OYSTER hint chain (advent.dat msgs #192/193/194): READ/EXAMINE the
+  // in-room oyster arms a Y/N prompt; YES reveals it for a 10-point cost (handled
+  // in the prompt block at the top of processInput); re-reading after reveal
+  // repeats msg #194.
+  private iReadOyster(verb: string, noun: string): boolean {
+    if (verb !== "read" && verb !== "examine") return false;
+    if (noun !== "oyster") return false;
+    if (!this.a.oyster_item.is_in_room(this.a.player_room())) return false;
+    if (this.a.is_oyster_revealed()) {
+      this.println("It says the same thing it did before.");
+      return true;
+    }
+    this.prompts.offer_oyster();
+    this.println("Hmmm, this looks like a clue, which means it'll cost you 10 points to");
+    this.println("read it. Should I go ahead and read it anyway?");
+    return true;
   }
 
   private iThrowAxe(verb: string, noun: string): boolean {
