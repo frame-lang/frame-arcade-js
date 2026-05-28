@@ -10,6 +10,7 @@
 // listActionsHere. Honest scope: bounded, directed, RNG-sampled checking — strong
 // evidence, not exhaustive proof.
 import { CcaDriver, type Action } from "../driver";
+import { CANONICAL_JOURNEY } from "./journeys";
 
 // Carryable item IDs for the inventory component of the state vector (mirrors
 // Godot cca_model_adapter.ITEM_IDS).
@@ -77,6 +78,44 @@ export class CcaModelAdapter {
   observe(o: CcaDriver): string {
     return `${this.state_hash(o)}|prompt=${o.promptMachine().is_active()}/${o.promptMachine().current_prompt()}|player=${o.machine().player.get_state()}`;
   }
+  // Liveness predicate for EF-won.
+  is_won(o: CcaDriver): boolean {
+    return o.machine().endgame_state() === "won";
+  }
+}
+
+// MilestoneRegistry (scripts/milestone_registry.gd) — (journey, milestone) → save
+// bytes. JourneyTree.walk_to captures a journey's milestones into one.
+export class MilestoneRegistry {
+  private readonly snaps = new Map<string, string>();
+  record(journey: string, milestone: string, bytes: string): void {
+    this.snaps.set(`${journey}:${milestone}`, bytes);
+  }
+  get_snapshot(journey: string, milestone: string): string {
+    return this.snaps.get(`${journey}:${milestone}`) ?? "";
+  }
+  has(journey: string, milestone: string): boolean {
+    return this.snaps.has(`${journey}:${milestone}`);
+  }
+}
+
+// Walk CANONICAL_JOURNEY through a driver, recording each milestone's save_state
+// into a fresh MilestoneRegistry under "canonical_journey:<name>" — the JS
+// counterpart to JourneyTree.register_default() + walk_to("…:InRepository").
+// Applies the canonical FSM shortcuts (fillTreasures ×13 / tickToRepository ×35).
+export function captureCanonicalMilestones(): MilestoneRegistry {
+  const reg = new MilestoneRegistry();
+  const d = new CcaDriver();
+  d.machine().dwarves_auto_woken = true;
+  d.machine().chance.reseed(42);
+  for (const m of CANONICAL_JOURNEY) {
+    if (m.shortcut === "fillTreasures") for (let k = 0; k < 13; k++) d.machine().endgame.treasure_deposited();
+    else if (m.shortcut === "tickToRepository") for (let k = 0; k < 35; k++) d.machine().tick();
+    for (const s of m.steps) if ("cmd" in s) d.input(s.cmd.toLowerCase());
+    reg.record("canonical_journey", m.name, d.machine().save_state());
+    if (m.name === "InRepository") break;
+  }
+  return reg;
 }
 
 interface Violation {
@@ -202,5 +241,138 @@ export class FrameStateChecker {
 
   reached_count(): number {
     return this.visited.size;
+  }
+}
+
+// All carryable item IDs the bespoke search considers (mirrors Godot
+// state_space.ITEM_IDS — includes 141 = mark_rod).
+const SS_ITEM_IDS = [
+  100, 101, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123,
+  130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+];
+
+// Faithful TS port of Godot scripts/state_space.gd — the bespoke deterministic
+// BFS over CCA's reachable state graph (RFC-0001). Independent of FrameStateChecker
+// (frame_checker_demo cross-validates the two reach the same distinct-room count).
+// Hash = room + sorted inventory + NPC states (no endgame — reachability, not
+// liveness). Invariants are thorough: room range, score floor, lamp battery,
+// endgame phase, deposit count + deposit/FSM consistency, inventory consistency.
+export class StateSpace {
+  seed = 0;
+  max_states = 1000;
+  seedBytes: string | null = null;
+  reseedChanceAfterRestore = false;
+  areaRooms: Set<number> | null = null;
+  visited = new Map<string, boolean>();
+  reproducer = new Map<string, string[]>();
+  violations: Violation[] = [];
+  states_visited = 0;
+  actions_tried = 0;
+  hit_cap = false;
+
+  prepareDriver(): CcaDriver {
+    const d = new CcaDriver();
+    d.machine().dwarves_auto_woken = true;
+    d.machine().chance.reseed(this.seed);
+    return d;
+  }
+
+  run(): void {
+    const driver = this.prepareDriver();
+    if (this.seedBytes) {
+      driver.machine().restore_state(this.seedBytes);
+      driver.resetSession();
+      if (this.reseedChanceAfterRestore) driver.machine().chance.reseed(this.seed);
+    }
+    this.run_from(driver);
+  }
+
+  run_from(driver: CcaDriver): void {
+    const rootState = driver.machine().save_state();
+    const rootHash = this.hashState(driver);
+    this.visited.set(rootHash, true);
+    this.reproducer.set(rootHash, []);
+    this.states_visited = 1;
+    const queue: { state: string; path: string[]; hash: string }[] = [{ state: rootState, path: [], hash: rootHash }];
+    while (queue.length > 0) {
+      if (this.states_visited >= this.max_states) {
+        this.hit_cap = true;
+        break;
+      }
+      const node = queue.shift() as { state: string; path: string[]; hash: string };
+      driver.machine().restore_state(node.state);
+      driver.resetSession();
+      for (const action of driver.listActionsHere()) {
+        if (action.kind === "wild") continue;
+        this.actions_tried += 1;
+        driver.machine().restore_state(node.state);
+        driver.resetSession();
+        driver.input(action.input);
+        for (const f of this.checkInvariants(driver, node.path.concat([action.key]))) this.violations.push(f);
+        const newHash = this.hashState(driver);
+        if (!this.visited.has(newHash)) {
+          this.visited.set(newHash, true);
+          const newPath = node.path.concat([action.key]);
+          this.reproducer.set(newHash, newPath);
+          const newRoom = parseInt(newHash.slice(2).split("|")[0], 10);
+          if (this.areaRooms === null || this.areaRooms.has(newRoom)) {
+            queue.push({ state: driver.machine().save_state(), path: newPath, hash: newHash });
+            this.states_visited += 1;
+          }
+          if (this.states_visited >= this.max_states) {
+            this.hit_cap = true;
+            break;
+          }
+        }
+      }
+      if (this.hit_cap) break;
+    }
+  }
+
+  hashState(driver: CcaDriver): string {
+    const f = driver.machine();
+    const inv: string[] = [];
+    for (const id of SS_ITEM_IDS) if (f.player.carrying(id)) inv.push(String(id));
+    const npc = `${f.bird.get_state()},${f.snake.get_state()},${f.bear.get_state()},${f.troll.get_state()},${f.pirate.get_state()}`;
+    return `r=${f.player_room()}|i=${inv.join("/")}|n=${npc}`;
+  }
+
+  distinctRooms(): number {
+    const rooms = new Set<number>();
+    for (const h of this.visited.keys()) rooms.add(parseInt(h.slice(2).split("|")[0], 10));
+    return rooms.size;
+  }
+
+  private checkInvariants(driver: CcaDriver, path: string[]): Violation[] {
+    const f = driver.machine();
+    const failures: Violation[] = [];
+    const hash = this.hashState(driver);
+    const add = (reason: string): void => {
+      failures.push({ hash, path: path.slice(), reason });
+    };
+    const room: number = f.player_room();
+    if (room < 1 || room > 140) add(`player_room ${room} out of range [1..140]`);
+    if (f.score() < -100) add(`score ${f.score()} below sanity floor`);
+    const battery: number = f.lamp.battery_left();
+    if (battery < 0 || battery > f.lamp.MAX_BATTERY) add(`lamp battery ${battery} out of [0..${f.lamp.MAX_BATTERY}]`);
+    const es: string = f.endgame_state();
+    if (!["active", "closing", "in_repository", "won", "permadead"].includes(es)) add(`unknown endgame state '${es}'`);
+    const deposits: number = f.treasures_deposited();
+    if (deposits < 0 || deposits > 15) add(`treasures_deposited ${deposits} out of [0..15]`);
+    let actualDeposited = 0;
+    for (const t of [f.gold, f.silver, f.diamonds, f.jewelry, f.pearl, f.vase, f.eggs, f.trident, f.emerald, f.spices, f.chest, f.pyramid, f.rug, f.coins, f.chain]) {
+      if (t.get_state() === "deposited") actualDeposited += 1;
+    }
+    if (actualDeposited !== deposits) add(`deposit-count mismatch: counter=${deposits}, treasure FSMs=${actualDeposited}`);
+    const itemChecks: [number, unknown][] = [
+      [f.ROD_ID, f.rod_item], [f.KEYS_ID, f.keys_item], [f.BOTTLE_ID, f.bottle_item],
+      [f.CAGE_ID, f.cage_item], [f.FOOD_ID, f.food_item], [f.PILLOW_ID, f.pillow_item],
+      [f.AXE_ID, f.axe_item], [f.CLAM_ID, f.clam_item], [f.MAGAZINE_ID, f.magazine_item], [f.LAMP_ID, f.lamp_item],
+    ];
+    for (const [id, item] of itemChecks) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (f.player.carrying(id) !== (item as any).is_carried()) add(`inventory inconsistency for id ${id}`);
+    }
+    return failures;
   }
 }
