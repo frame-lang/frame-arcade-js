@@ -94,6 +94,8 @@ import "./test_cca_credit_splash.cca-test";
 import "./test_cca_pdp10_easter_eggs.cca-test";
 import "./test_cca_playthrough.cca-test";
 import "./test_cca_full.cca-test";
+import "./test_cca_canon.cca-test";
+import "./test_cca_death_journeys.cca-test";
 
 import { summary } from "./_harness";
 
