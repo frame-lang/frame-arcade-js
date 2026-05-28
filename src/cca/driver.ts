@@ -60,6 +60,37 @@ const MOTION_VERBS = [
 const FORCED_ROOMS = [16, 22, 26, 32, 40, 59, 79, 89, 90, 113];
 // Canon BITSET(LOC,3) rooms the pirate is barred from.
 const FORBIDDEN_PIRATE_ROOMS = [101, 117, 122];
+
+// One enumerated affordance at the player's current room (mirrors the Dictionary
+// entries Godot's list_actions_here() returns). Consumed by the model-checking
+// harness (StateSpace BFS / area explorer / monkey / affordance_fsm_agree).
+export interface Action {
+  input: string;
+  key: string;
+  kind: string;
+}
+// Carriable obj-id → canonical noun for take/drop + wild enumeration (mirrors
+// Godot driver._PROBE_CARRIABLES; ids match the Adventure *_ID constants).
+// MARK_ROD_ID (141) is omitted — it spawns in the endgame and "rod" matches it.
+const PROBE_CARRIABLES: [number, string][] = [
+  [100, "bird"], [101, "chain"],
+  [110, "gold"], [111, "silver"], [112, "diamonds"],
+  [113, "jewelry"], [114, "pearl"], [115, "vase"],
+  [116, "eggs"], [117, "trident"], [118, "emerald"],
+  [119, "spices"], [120, "chest"], [121, "pyramid"],
+  [122, "rug"], [123, "coins"],
+  [130, "rod"], [131, "keys"], [132, "bottle"],
+  [133, "cage"], [134, "food"], [135, "pillow"],
+  [136, "axe"], [137, "clam"], [138, "oyster"],
+  [139, "batteries"], [140, "magazine"], [142, "lamp"],
+];
+// Generic verbs the wild pass crosses with every locally-visible noun (mirrors
+// Godot driver._PROBE_WILD_VERBS) — surfaces parser/dispatch bugs on odd combos.
+const PROBE_WILD_VERBS = [
+  "examine", "attack", "kill", "wave", "throw", "hurl",
+  "eat", "drink", "light", "extinguish", "feed", "release",
+  "read", "break", "pour", "fill", "rub", "find",
+];
 const DARK_PIT_PCT = 35;
 
 function truncate5(s: string): string {
@@ -222,6 +253,108 @@ export class CcaDriver {
     this.lastRoom = -1; // force the next printRoom to render
     this.deadEnd = false; // the restored world is the source of truth
     if (this.a.player_state() === "dead") this.prompts.offer_revive();
+  }
+
+  /**
+   * Enumerate the affordances available at the player's current room (faithful
+   * port of Godot driver.list_actions_here). Each entry is {input, key, kind};
+   * the key buckets coverage. Drives the model-checking harness (StateSpace BFS,
+   * area explorer, monkey) and is verified against the FSM by affordance_fsm_agree.
+   */
+  listActionsHere(): Action[] {
+    const a = this.a;
+    const actions: Action[] = [];
+    const room: number = a.player_room();
+
+    // Movement: every key in the current room's exit table.
+    for (const direction of Object.keys(ROOMS[room] ?? {})) {
+      actions.push({ input: direction, key: "move:" + direction, kind: "move" });
+    }
+    // LOOK — always available.
+    actions.push({ input: "look", key: "look", kind: "verb" });
+
+    // Take/drop the carriables visible here.
+    for (const [id, noun] of PROBE_CARRIABLES) {
+      if (a.player.carrying(id)) actions.push({ input: "drop " + noun, key: "drop:" + noun, kind: "drop" });
+      else if (this.objectInRoom(id, room)) actions.push({ input: "take " + noun, key: "take:" + noun, kind: "take" });
+    }
+    // Lamp on/off — preconditioned on carrying.
+    if (a.player.carrying(a.LAMP_ID)) {
+      if (a.lamp.is_lit()) actions.push({ input: "extinguish lamp", key: "extinguish:lamp", kind: "verb" });
+      else actions.push({ input: "light lamp", key: "light:lamp", kind: "verb" });
+    }
+    // Wave rod.
+    if (a.player.carrying(a.ROD_ID)) actions.push({ input: "wave rod", key: "wave:rod", kind: "verb" });
+    // Unlock/lock grate — canon rooms 8 / 9.
+    if (a.player.carrying(a.KEYS_ID) && (room === 8 || room === 9)) {
+      if (a.grate_locked()) actions.push({ input: "unlock grate", key: "unlock:grate", kind: "verb" });
+      else actions.push({ input: "lock grate", key: "lock:grate", kind: "verb" });
+    }
+    // Release bird.
+    if (a.player.carrying(a.BIRD_ID)) actions.push({ input: "release bird", key: "release:bird", kind: "verb" });
+
+    // NPC interactions — gated by canon room + creature state.
+    if (room === 19 && a.snake.is_blocking()) actions.push({ input: "attack snake", key: "attack:snake", kind: "verb" });
+    if (room === 119 && a.dragon_alive()) {
+      actions.push({ input: "attack dragon", key: "attack:dragon", kind: "verb" });
+      if (a.player.carrying(a.AXE_ID)) actions.push({ input: "throw axe", key: "throw:axe", kind: "verb" });
+    }
+    if (room === 130) {
+      actions.push({ input: "attack bear", key: "attack:bear", kind: "verb" });
+      if (a.player.carrying(a.FOOD_ID)) actions.push({ input: "feed bear", key: "feed:bear", kind: "verb" });
+      if (a.player.carrying(a.KEYS_ID) && a.bear.get_state() === "tame") {
+        actions.push({ input: "unlock chain", key: "unlock:chain", kind: "verb" });
+      }
+    }
+    // Eat food.
+    if (a.player.carrying(a.FOOD_ID)) actions.push({ input: "eat food", key: "eat:food", kind: "verb" });
+    // Bottle interactions.
+    if (a.player.carrying(a.BOTTLE_ID)) {
+      if (a.bottle.has_water()) {
+        actions.push({ input: "pour water", key: "pour:water", kind: "verb" });
+        actions.push({ input: "drink water", key: "drink:water", kind: "verb" });
+      } else if (a.bottle.has_oil()) {
+        actions.push({ input: "pour oil", key: "pour:oil", kind: "verb" });
+      } else if ([1, 3, 4, 7, 24, 38, 83, 84, 95, 113].includes(room)) {
+        // Combined water sources ∪ oil source — must match the FSM side
+        // (affordance_fsm_agree enforces this bidirectionally).
+        actions.push({ input: "fill bottle", key: "fill:bottle", kind: "verb" });
+      }
+    }
+    // Clam + rod → break.
+    if (a.player.carrying(a.CLAM_ID) && a.player.carrying(a.ROD_ID)) {
+      actions.push({ input: "break clam", key: "break:clam", kind: "verb" });
+    }
+    // Read oyster / magazine.
+    if (a.player.carrying(a.OYSTER_ID) || a.oyster_item.is_in_room(room)) {
+      actions.push({ input: "read oyster", key: "read:oyster", kind: "verb" });
+    }
+    if (a.player.carrying(a.MAGAZINE_ID) || a.magazine_item.is_in_room(room)) {
+      actions.push({ input: "read magazine", key: "read:magazine", kind: "verb" });
+    }
+    // Magic-word teleports — gated to canon anchor rooms.
+    if (room === 1 || room === 11) actions.push({ input: "xyzzy", key: "magic:xyzzy", kind: "magic" });
+    if (room === 3 || room === 33) actions.push({ input: "plugh", key: "magic:plugh", kind: "magic" });
+    if (room === 33 || room === 100) actions.push({ input: "plover", key: "magic:plover", kind: "magic" });
+    if (room === 13 || room === 121) {
+      for (const w of ["fee", "fie", "foe", "foo"]) actions.push({ input: w, key: "magic:" + w, kind: "magic" });
+    }
+    // BLAST — endgame only.
+    if (a.endgame_state() === "in_repository") actions.push({ input: "blast", key: "verb:blast", kind: "verb" });
+
+    // Wild verb × noun combinations (parser/dispatch coverage).
+    const nounsHere: string[] = [];
+    for (const [id, noun] of PROBE_CARRIABLES) {
+      if (a.player.carrying(id) || this.objectInRoom(id, room)) nounsHere.push(noun);
+    }
+    if (room === 19 && a.snake.is_blocking()) nounsHere.push("snake");
+    if (room === 119 && a.dragon_alive()) nounsHere.push("dragon");
+    if (room === 130) nounsHere.push("bear");
+    if (a.bird.get_location() === room && !a.player.carrying(a.BIRD_ID)) nounsHere.push("bird");
+    for (const verb of PROBE_WILD_VERBS) {
+      for (const n of nounsHere) actions.push({ input: verb + " " + n, key: `wild:${verb}:${n}`, kind: "wild" });
+    }
+    return actions;
   }
 
   // ---- save / load (localStorage-backed; headless via SaveStore) ----

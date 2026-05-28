@@ -96,6 +96,7 @@ import "./test_cca_playthrough.cca-test";
 import "./test_cca_full.cca-test";
 import "./test_cca_canon.cca-test";
 import "./test_cca_death_journeys.cca-test";
+import "./test_cca_affordance_fsm_agree.cca-test";
 
 import { summary } from "./_harness";
 
