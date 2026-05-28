@@ -11,6 +11,7 @@ import "./test_cca_state_space_seeded_multiseed.cca-test";
 import "./test_cca_area_explorer.cca-test";
 import "./test_cca_monkey.cca-test";
 import "./test_cca_dag_coverage.cca-test";
+import "./test_cca_probe.cca-test";
 
 import { summary } from "./_harness";
 
