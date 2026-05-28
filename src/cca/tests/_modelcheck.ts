@@ -318,6 +318,9 @@ export class StateSpace {
   seedBytes: string | null = null;
   reseedChanceAfterRestore = false;
   areaRooms: Set<number> | null = null;
+  // Round-trip save/restore at each state and flag a hash divergence (the
+  // canonical-start BFS opts in — it exercises persistence soundness too).
+  checkSaveRestore = false;
   visited = new Map<string, boolean>();
   reproducer = new Map<string, string[]>();
   violations: Violation[] = [];
@@ -357,6 +360,14 @@ export class StateSpace {
       const node = queue.shift() as { state: string; path: string[]; hash: string };
       driver.machine().restore_state(node.state);
       driver.resetSession();
+      if (this.checkSaveRestore) {
+        const reState = driver.machine().save_state();
+        driver.machine().restore_state(reState);
+        const reHash = this.hashState(driver);
+        if (reHash !== node.hash) {
+          this.violations.push({ hash: node.hash, path: node.path.slice(), reason: `save/restore round-trip diverged: ${node.hash} → ${reHash}` });
+        }
+      }
       for (const action of driver.listActionsHere()) {
         if (action.kind === "wild") continue;
         this.actions_tried += 1;
