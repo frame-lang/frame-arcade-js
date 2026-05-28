@@ -97,6 +97,8 @@ import "./test_cca_full.cca-test";
 import "./test_cca_canon.cca-test";
 import "./test_cca_death_journeys.cca-test";
 import "./test_cca_affordance_fsm_agree.cca-test";
+import "./test_cca_retry_gate.cca-test";
+import "./test_cca_maze_sweep.cca-test";
 
 import { summary } from "./_harness";
 
