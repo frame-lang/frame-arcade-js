@@ -415,10 +415,13 @@ export class StateSpace {
     return `r=${f.player_room()}|i=${inv.join("/")}|n=${npc}`;
   }
 
-  distinctRooms(): number {
+  coveredRooms(): Set<number> {
     const rooms = new Set<number>();
     for (const h of this.visited.keys()) rooms.add(parseInt(h.slice(2).split("|")[0], 10));
-    return rooms.size;
+    return rooms;
+  }
+  distinctRooms(): number {
+    return this.coveredRooms().size;
   }
 
   private checkInvariants(driver: CcaDriver, path: string[]): Violation[] {
