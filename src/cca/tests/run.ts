@@ -84,6 +84,12 @@ import "./test_cca_maze_decoration.cca-test";
 import "./test_cca_npc_spec.cca-test";
 import "./test_cca_world_spec.cca-test";
 import "./test_cca_death_resurrection.cca-test";
+import "./test_cca_dwarf_canon.cca-test";
+import "./test_cca_find_msg94.cca-test";
+import "./test_cca_scenery_flavor.cca-test";
+import "./test_cca_rod2_dynamite.cca-test";
+import "./test_cca_minor_verbs.cca-test";
+import "./test_cca_verb_defaults.cca-test";
 
 import { summary } from "./_harness";
 

@@ -95,6 +95,9 @@ export class CcaDriver {
   // accumulated lines and slice by offset, exactly as the Godot tests do.
   readonly captured: string[] = [];
   private lastRoom = -1;
+  // Rooms already rendered in full — for BRIEF mode, which suppresses the long
+  // description on a revisit (canon STMT 8260). Mirrors Godot driver._visited_rooms.
+  private visitedRooms = new Set<number>();
   private deadEnd = false;
   private syn5: Record<string, string> = {};
   // Persistence sink (browser: localStorage; tests: in-memory; null: disabled).
@@ -190,7 +193,7 @@ export class CcaDriver {
    */
   captureRoomRender(): string[] {
     this.out = [];
-    this.printRoom();
+    this.maybePrintRoom();
     return this.drain();
   }
 
@@ -409,6 +412,7 @@ export class CcaDriver {
     if (this.iCalm(verb)) return this.endTurn();
     if (this.iEat(verb, noun)) return this.endTurn();
     if (this.iFeed(verb, noun)) return this.endTurn();
+    if (this.iSceneryRead(verb, noun)) return this.endTurn();
 
     // Room-specific motion aliases (e.g. CLIMB/BARREN) the room defines as exits.
     if (verb in exits) {
@@ -581,8 +585,18 @@ export class CcaDriver {
     this.checkPlayerDeath();
     const st: string = this.a.player_state();
     if (st !== "dead" && st !== "permadead" && (this.a.player_room() !== this.lastRoom || moved)) {
-      this.printRoom();
+      this.maybePrintRoom();
     }
+  }
+
+  // Render the room unless BRIEF mode suppresses a revisit (mirrors Godot
+  // driver._maybe_print_room_after_move): in brief mode, an already-visited room
+  // shows nothing on re-entry; LOOK forces a full re-display via printRoom.
+  private maybePrintRoom(): void {
+    const current: number = this.a.player_room();
+    if (this.a.is_brief_mode() && this.visitedRooms.has(current)) return;
+    this.visitedRooms.add(current);
+    this.printRoom();
   }
 
   private printRoom(): void {
@@ -596,6 +610,84 @@ export class CcaDriver {
     if (this.lastRoom === 33 && !this.a.endgame_closing() && this.a.chance.decide("y2_whisper", 25)) {
       this.println('A hollow voice says "PLUGH".');
     }
+    // Canon msg #3 first-dwarf-encounter (advent.for STMT 6000): fires once when
+    // the player renders a room holding a stalking dwarf (mirrors Godot
+    // _print_room). In a full turn checkDwarfAxe marks the flag first, so this is
+    // the render-path narration the dwarf-canon harness exercises directly.
+    if (!this.a.is_dwarf_first_encounter_done() && this.dwarfAtRoom(this.lastRoom)) {
+      this.a.mark_dwarf_first_encounter_done();
+      this.println("A little dwarf just walked around a corner, saw you, threw a little");
+      this.println("axe at you which missed, cursed, and ran away.");
+    }
+  }
+
+  // True if a stalking dwarf is at `room` (mirrors Godot driver._dwarf_at_room;
+  // dwarf_room_of returns -1 for hidden/dead dwarves, so a valid room match
+  // implies a stalking dwarf there).
+  private dwarfAtRoom(room: number): boolean {
+    for (let i = 1; i <= 5; i++) if (this.a.dwarf_room_of(i) === room) return true;
+    return false;
+  }
+
+  // FIND support — mirrors Godot driver._object_in_room. Treasures answer via
+  // get_location(); plain items via is_in_room(room).
+  private objectInRoom(objId: number, room: number): boolean {
+    const a = this.a;
+    switch (objId) {
+      case a.BIRD_ID: return a.bird.get_location() === room;
+      case a.GOLD_ID: return a.gold.get_location() === room;
+      case a.SILVER_ID: return a.silver.get_location() === room;
+      case a.DIAMONDS_ID: return a.diamonds.get_location() === room;
+      case a.JEWELRY_ID: return a.jewelry.get_location() === room;
+      case a.PEARL_ID: return a.pearl.get_location() === room;
+      case a.VASE_ID: return a.vase.get_location() === room;
+      case a.EGGS_ID: return a.eggs.get_location() === room;
+      case a.TRIDENT_ID: return a.trident.get_location() === room;
+      case a.EMERALD_ID: return a.emerald.get_location() === room;
+      case a.SPICES_ID: return a.spices.get_location() === room;
+      case a.CHEST_ID: return a.chest.get_location() === room;
+      case a.PYRAMID_ID: return a.pyramid.get_location() === room;
+      case a.RUG_ID: return a.rug.get_location() === room;
+      case a.COINS_ID: return a.coins.get_location() === room;
+      case a.CHAIN_ID: return a.chain.get_location() === room;
+      case a.ROD_ID: return a.rod_item.is_in_room(room);
+      case a.MARK_ROD_ID: return a.mark_rod_item.is_in_room(room);
+      case a.KEYS_ID: return a.keys_item.is_in_room(room);
+      case a.LAMP_ID: return a.lamp_item.is_in_room(room);
+      case a.BOTTLE_ID: return a.bottle_item.is_in_room(room);
+      case a.CAGE_ID: return a.cage_item.is_in_room(room);
+      case a.FOOD_ID: return a.food_item.is_in_room(room);
+      case a.PILLOW_ID: return a.pillow_item.is_in_room(room);
+      case a.AXE_ID: return a.axe_item.is_in_room(room);
+      case a.CLAM_ID: return a.clam_item.is_in_room(room);
+      case a.OYSTER_ID: return a.oyster_item.is_in_room(room);
+      case a.BATTERIES_ID: return a.batteries_item.is_in_room(room);
+      case a.MAGAZINE_ID: return a.magazine_item.is_in_room(room);
+      default: return false;
+    }
+  }
+
+  // Resolve a noun token to a port object ID, or 0 if no match (FIND vocabulary;
+  // mirrors Godot driver._resolve_object_id — canon words only, not a synonym
+  // engine). Multi-word names ("gold nugget") are accepted.
+  private resolveObjectId(noun: string): number {
+    const a = this.a;
+    const n = noun.trim().toLowerCase();
+    if (n === "") return 0;
+    const map: Record<string, number> = {
+      bird: a.BIRD_ID, chain: a.CHAIN_ID,
+      gold: a.GOLD_ID, nugget: a.GOLD_ID, "gold nugget": a.GOLD_ID,
+      silver: a.SILVER_ID, bars: a.SILVER_ID, "silver bars": a.SILVER_ID,
+      diamonds: a.DIAMONDS_ID, jewelry: a.JEWELRY_ID, pearl: a.PEARL_ID,
+      vase: a.VASE_ID, eggs: a.EGGS_ID, trident: a.TRIDENT_ID,
+      emerald: a.EMERALD_ID, spices: a.SPICES_ID, chest: a.CHEST_ID,
+      pyramid: a.PYRAMID_ID, rug: a.RUG_ID, coins: a.COINS_ID,
+      rod: a.ROD_ID, keys: a.KEYS_ID, lamp: a.LAMP_ID, lantern: a.LAMP_ID,
+      bottle: a.BOTTLE_ID, cage: a.CAGE_ID, food: a.FOOD_ID, pillow: a.PILLOW_ID,
+      axe: a.AXE_ID, clam: a.CLAM_ID, oyster: a.OYSTER_ID,
+      magazine: a.MAGAZINE_ID, batteries: a.BATTERIES_ID,
+    };
+    return map[n] ?? 0;
   }
 
   private checkPlayerDeath(): void {
@@ -717,6 +809,27 @@ export class CcaDriver {
         this.println(this.a.request_hint(noun !== "" ? noun : "bird"));
         this.afterTurn();
         return true;
+      case "find": {
+        // Canon FIND (advent.for STMT 9190) priority ladder: carrying → #24,
+        // here → #94, closed → #138, else → #59.
+        const findObjId: number = this.resolveObjectId(noun);
+        if (findObjId > 0 && this.a.player.carrying(findObjId)) {
+          this.println("You are already carrying it!");
+          return true;
+        }
+        if (findObjId > 0 && this.objectInRoom(findObjId, this.a.player_room())) {
+          this.println("I believe what you want is right here with you.");
+          return true;
+        }
+        if (this.a.endgame_state() === "in_repository") {
+          this.println("I daresay whatever you want is around here somewhere.");
+          return true;
+        }
+        this.println(
+          "I can only tell you what you see as you move about and manipulate things. I cannot tell you where remote things are.",
+        );
+        return true;
+      }
       case "save":
         if (!this.store) {
           this.println("Saving isn't available in this session.");
@@ -1142,6 +1255,92 @@ export class CcaDriver {
   // in-room oyster arms a Y/N prompt; YES reveals it for a 10-point cost (handled
   // in the prompt block at the top of processInput); re-reading after reveal
   // repeats msg #194.
+  // Canon scenery EXAMINE/READ prose (mirrors Godot driver._intercept_scenery_read,
+  // minus the oyster hint chain — iReadOyster handles that). Room-gated feature
+  // inspection; unmatched nouns fall through to the FSM examine ("Peculiar").
+  private iSceneryRead(verb: string, noun: string): boolean {
+    if (verb !== "read" && verb !== "examine") return false;
+    const er: number = this.a.player_room();
+    // ROD2 (object 6) — pre-CLOSED rod / post-CLOSED "Peculiar".
+    if (noun === "rod" && this.a.mark_rod_here()) {
+      if (this.a.endgame_state() === "in_repository") this.println("Peculiar. Nothing unexpected happens.");
+      else this.println("A small black rod with a rusty mark on the end.");
+      return true;
+    }
+    // STONE TABLET (object 13) at canon 101 → msg #196.
+    if (noun === "tablet" && er === 101) {
+      this.println("A massive stone tablet imbedded in the wall reads:");
+      this.println('"Congratulations on bringing light into the dark-room!"');
+      return true;
+    }
+    // MESSAGE in second maze (object 36) at canon 140 → msg #191.
+    if (noun === "message" && er === 140) {
+      this.println("There is a message scrawled in the dust in a flowery script, reading:");
+      this.println('"This is not the maze where the pirate leaves his treasure chest."');
+      return true;
+    }
+    // MIRROR (object 23) at canon 109.
+    if (noun === "mirror" && er === 109) {
+      this.println("Peculiar. Nothing unexpected happens.");
+      return true;
+    }
+    // SHADOWY FIGURE (object 27) at canon 35 / 110.
+    if ((noun === "figure" || noun === "shadow") && (er === 35 || er === 110)) {
+      this.println("The shadowy figure seems to be trying to attract your attention.");
+      return true;
+    }
+    // STALACTITE (object 26) at canon 111.
+    if (noun === "stalactite" && er === 111) {
+      this.println("Peculiar. Nothing unexpected happens.");
+      return true;
+    }
+    // CAVE DRAWINGS (object 29) at canon 97.
+    if ((noun === "drawings" || noun === "drawing") && er === 97) {
+      this.println("Peculiar. Nothing unexpected happens.");
+      return true;
+    }
+    // VOLCANO/GEYSER (object 37) at canon 126.
+    if ((noun === "volcano" || noun === "geyser") && er === 126) {
+      this.println("Peculiar. Nothing unexpected happens.");
+      return true;
+    }
+    // CARPET/MOSS (object 40) at canon 96.
+    if ((noun === "carpet" || noun === "moss") && er === 96) {
+      this.println("Peculiar. Nothing unexpected happens.");
+      return true;
+    }
+    // PHONY PLANT (object 25) at canon 23 / 35.
+    if ((noun === "plant" || noun === "plant2") && (er === 23 || er === 35)) {
+      this.println("There is a huge beanstalk growing out of the west pit up to the hole.");
+      return true;
+    }
+    // Canon msg #63 — EXAMINE GRATE at the depression (canon 8 / 9).
+    if (noun === "grate" && (er === 8 || er === 9)) {
+      this.println("The grate is very solid and has a hardened steel lock. You cannot");
+      this.println("enter without a key, and there are no keys nearby. I would recommend");
+      this.println("looking elsewhere for the keys.");
+      return true;
+    }
+    // Canon msg #64 — EXAMINE TREES/FOREST in the forest rooms (canon 4 / 5 / 6).
+    if ((noun === "trees" || noun === "forest" || noun === "tree") && (er === 4 || er === 5 || er === 6)) {
+      this.println("The trees of the forest are large hardwood oak and maple, with an");
+      this.println("occasional grove of pine or spruce. There is quite a bit of under-");
+      this.println("growth, largely birch and ash saplings plus nondescript bushes of");
+      this.println("various sorts. This time of year visibility is quite restricted by");
+      this.println("all the leaves, but travel is quite easy if you detour around the");
+      this.println("spruce and berry bushes.");
+      return true;
+    }
+    // Canon msg #69 — EXAMINE MIST.
+    if (noun === "mist") {
+      this.println("Mist is a white vapor, usually water, seen from time to time in");
+      this.println("caverns. It can be found anywhere but is frequently a sign of a deep");
+      this.println("pit leading down to water.");
+      return true;
+    }
+    return false;
+  }
+
   private iReadOyster(verb: string, noun: string): boolean {
     if (verb !== "read" && verb !== "examine") return false;
     if (noun !== "oyster") return false;
