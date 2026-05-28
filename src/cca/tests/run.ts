@@ -92,6 +92,8 @@ import "./test_cca_minor_verbs.cca-test";
 import "./test_cca_verb_defaults.cca-test";
 import "./test_cca_credit_splash.cca-test";
 import "./test_cca_pdp10_easter_eggs.cca-test";
+import "./test_cca_playthrough.cca-test";
+import "./test_cca_full.cca-test";
 
 import { summary } from "./_harness";
 
