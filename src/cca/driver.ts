@@ -40,7 +40,8 @@ const VERB_SYNONYMS: Record<string, string> = {
   y: "yes",
   score: "score", help: "help", "?": "help", info: "info",
   look: "look", inventory: "inventory",
-  save: "save", suspend: "save",
+  save: "save", suspend: "suspend", pause: "suspend",
+  magic: "maint", maintenance: "maint",
   load: "load", restore: "load",
   detonate: "blast",
   retreat: "back",
@@ -137,7 +138,16 @@ export class CcaDriver {
       return this.drain();
     }
     this.a.wake_dwarves(); // canon: dwarves wake at game start, wandering the deep cave
-    this.println("Welcome to Adventure!  (Crowther & Woods, 1977 — Frame port)");
+    // Canon msg #1 (advent.dat, the 1977 Don Woods intro) — verbatim, with the
+    // Crowther/Woods byline and msg #65 prompt baked in, as Godot _print_welcome.
+    this.println(
+      'Somewhere nearby is Colossal Cave, where others have found fortunes in treasure and gold, though it is rumored that some who enter are never seen again. Magic is said to work in the cave. I will be your eyes and hands. Direct me with commands of 1 or 2 words. I should warn you that I look at only the first five letters of each word, so you\'ll have to enter "NORTHEAST" as "NE" to distinguish it from "NORTH". (Should you get stuck, type "HELP" for some general hints. For information on how to end your adventure, etc., type "INFO".)',
+    );
+    this.println("                      - - -");
+    this.println(
+      "This program was originally developed by Willie Crowther. Most of the features of the current program were added by Don Woods (DON @ SU-AI). Contact Don if you have any questions, comments, etc.",
+    );
+    this.println("Welcome to Adventure!! Would you like instructions? (Type HELP for hints.)");
     this.println("");
     this.printRoom();
     return this.drain();
@@ -247,6 +257,20 @@ export class CcaDriver {
     return true;
   }
 
+  // Canon SAVE confirmation (matches Godot _save_game which prints "Saved.").
+  // Persists to the store if one is attached; the per-turn autosave covers the
+  // ongoing case, so SAVE is just the explicit checkpoint + canon ack.
+  private saveGame(): void {
+    if (this.store) {
+      try {
+        this.store.setItem(SAVE_KEY, this.snapshot());
+      } catch {
+        /* storage full or blocked — still print the canon ack */
+      }
+    }
+    this.println("Saved.");
+  }
+
   // Autosave after every turn. A finished game clears the slot instead (so a
   // reload starts fresh). Storage errors (quota/blocked) are non-fatal.
   private autosave(): void {
@@ -352,6 +376,10 @@ export class CcaDriver {
           this.println(`of the words I've always known now has a new effect."`);
           this.a.score_hints -= 10;
           this.a.real_score -= 10;
+        } else if (promptName === "suspend") {
+          // Canon SUSPEND YES (advent.for STMT 8300) — msg #54 "OK" + save.
+          this.println("OK");
+          this.saveGame();
         }
         return;
       } else if (verb === "no") {
@@ -363,6 +391,8 @@ export class CcaDriver {
           this.println("OK.");
         } else if (promptName === "oyster") {
           this.println("OK."); // canon msg #194 (declined) — no penalty
+        } else if (promptName === "suspend") {
+          this.println("OK"); // canon SUSPEND NO — cancel + msg #54
         }
         return;
       } else if (this.prompts.accepts_only_yes_no()) {
@@ -831,16 +861,7 @@ export class CcaDriver {
         return true;
       }
       case "save":
-        if (!this.store) {
-          this.println("Saving isn't available in this session.");
-          return true;
-        }
-        try {
-          this.store.setItem(SAVE_KEY, this.snapshot());
-          this.println("Your game has been saved. (It also autosaves each turn; use RESTORE to resume.)");
-        } catch {
-          this.println("I couldn't save your game (storage is full or blocked).");
-        }
+        this.saveGame();
         return true;
       case "load": {
         if (!this.store) {
@@ -861,15 +882,42 @@ export class CcaDriver {
         return true;
       }
       case "hours":
+        // Canon HOURS (advent.for line 8310) — 1977 printed the PDP-10
+        // timesharing schedule; a desktop port has no off-hours.
         this.println("Colossal Cave is open all day, every day.");
+        this.println("(In the original 1977 PDP-10 release this verb");
+        this.println("printed the timesharing schedule during which");
+        this.println("non-wizards could play. On a desktop port the");
+        this.println("cave has no off-hours.)");
         return true;
       case "wizard":
-        this.println('"Are you a wizard?"  "Prove it! Say the magic word!"');
+        // Canon WIZARD (advent.for SUBROUTINE WIZARD) — msgs #16/#17/#20.
+        this.println('"Are you a wizard?"');
+        this.println('"Prove it!  Say the magic word!"');
+        this.println('"That is not what I thought it was.  Do you know what I thought it was?"');
         this.println('"Foo, you are nothing but a charlatan!"');
         return true;
       case "maint":
-        this.println("A cloud of green smoke clears to reveal a tall wizard in grey, who");
-        this.println('declares, "Maintenance mode requires a real PDP-10. This is neither."');
+        // Canon MAINT (advent.for SUBROUTINE MAINT) — canon msg #1 (tall wizard
+        // in grey) gently rewritten + msg #20. MAGIC / MAGIC MODE / MAINTENANCE
+        // all route here via synonyms.
+        this.println("A large cloud of green smoke appears in front of you. It clears");
+        this.println("away to reveal a tall wizard, clothed in grey. He fixes you with");
+        this.println('a steely glare and declares, "Maintenance mode requires a real');
+        this.println('PDP-10 and a sysadmin who knew Don Woods. This is neither."');
+        this.println("With that he makes a single pass over you with his hands, and");
+        this.println("you find yourself right back where you started.");
+        this.println("");
+        this.println('"Foo, you are nothing but a charlatan!"');
+        return true;
+      case "suspend":
+        // Canon SUSPEND (advent.for STMT 8300) — 45-minute latency warning, then
+        // msg #200 confirmation. The PromptDispatcher's $AwaitingSuspendConfirm
+        // handles YES (save + OK) / NO (cancel + OK).
+        this.println("I can suspend your adventure for you so that you can resume later, but");
+        this.println("you will have to wait at least 45 minutes before continuing.");
+        this.println("Is this acceptable?");
+        this.prompts.offer_suspend();
         return true;
       case "rub":
         this.println(

@@ -90,6 +90,8 @@ import "./test_cca_scenery_flavor.cca-test";
 import "./test_cca_rod2_dynamite.cca-test";
 import "./test_cca_minor_verbs.cca-test";
 import "./test_cca_verb_defaults.cca-test";
+import "./test_cca_credit_splash.cca-test";
+import "./test_cca_pdp10_easter_eggs.cca-test";
 
 import { summary } from "./_harness";
 
