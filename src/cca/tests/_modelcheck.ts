@@ -139,6 +139,18 @@ export function exploreStates(
   return { initial: initialState, states: [...saves.keys()], transitions, dead_ends, unreachable };
 }
 
+// Run a milestone-seeded BFS (RFC-0002): restore the canonical snapshot for
+// `milestone` and explore from there. Returns the StateSpace (read .violations /
+// .states_visited / .distinctRooms()).
+export function seededBfs(registry: MilestoneRegistry, milestone: string, cap: number, seed = 42): StateSpace {
+  const s = new StateSpace();
+  s.seed = seed;
+  s.max_states = cap;
+  s.seedBytes = registry.get_snapshot("canonical_journey", milestone);
+  s.run();
+  return s;
+}
+
 // MilestoneRegistry (scripts/milestone_registry.gd) — (journey, milestone) → save
 // bytes. JourneyTree.walk_to captures a journey's milestones into one.
 export class MilestoneRegistry {
@@ -158,11 +170,11 @@ export class MilestoneRegistry {
 // into a fresh MilestoneRegistry under "canonical_journey:<name>" — the JS
 // counterpart to JourneyTree.register_default() + walk_to("…:InRepository").
 // Applies the canonical FSM shortcuts (fillTreasures ×13 / tickToRepository ×35).
-export function captureCanonicalMilestones(): MilestoneRegistry {
+export function captureCanonicalMilestones(seed = 42): MilestoneRegistry {
   const reg = new MilestoneRegistry();
   const d = new CcaDriver();
   d.machine().dwarves_auto_woken = true;
-  d.machine().chance.reseed(42);
+  d.machine().chance.reseed(seed);
   for (const m of CANONICAL_JOURNEY) {
     if (m.shortcut === "fillTreasures") for (let k = 0; k < 13; k++) d.machine().endgame.treasure_deposited();
     else if (m.shortcut === "tickToRepository") for (let k = 0; k < 35; k++) d.machine().tick();
