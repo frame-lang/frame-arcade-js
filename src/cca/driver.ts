@@ -249,9 +249,20 @@ export class CcaDriver {
    */
   restoreFsmState(blob: string): void {
     this.a.restore_state(blob);
+    this.resetSession();
+  }
+
+  /**
+   * Reset the driver's per-session state (prompts, reprint marker, end-of-run
+   * latch) and re-derive the modal prompt from world state — the JS counterpart
+   * to Godot CcaModelAdapter.reset_session. THE incomplete-state-vector remedy:
+   * the PromptDispatcher lives on the driver, outside fsm.save_state, so after a
+   * restore we re-derive it (idle unless the player is dead → revive prompt).
+   */
+  resetSession(): void {
     this.prompts = PromptDispatcher._create();
-    this.lastRoom = -1; // force the next printRoom to render
-    this.deadEnd = false; // the restored world is the source of truth
+    this.lastRoom = -1;
+    this.deadEnd = false;
     if (this.a.player_state() === "dead") this.prompts.offer_revive();
   }
 

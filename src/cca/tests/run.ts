@@ -99,6 +99,7 @@ import "./test_cca_death_journeys.cca-test";
 import "./test_cca_affordance_fsm_agree.cca-test";
 import "./test_cca_retry_gate.cca-test";
 import "./test_cca_maze_sweep.cca-test";
+import "./test_cca_restore_soundness_milestones.cca-test";
 
 import { summary } from "./_harness";
 
