@@ -84,6 +84,61 @@ export class CcaModelAdapter {
   }
 }
 
+// StateExplorer (scripts/state_explorer.gd) — explore the reachable state graph
+// of any Frame @@[persist] @@system via save/restore teleport (O(states×events),
+// independent of graph diameter). Returns {initial, states, transitions,
+// dead_ends, unreachable}. `events` is a list of [eventName, args].
+export interface ExploreReport {
+  initial: string;
+  states: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  transitions: { from: string; event: string; args: any[]; to: string }[];
+  dead_ends: string[];
+  unreachable: string[];
+}
+export function exploreStates(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  factory: () => any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  events: [string, any[]][],
+  maxStates = 100,
+): ExploreReport {
+  const initial = factory();
+  const initialState: string = initial.get_state();
+  const saves = new Map<string, string>();
+  saves.set(initialState, initial.save_state());
+  const queue: string[] = [initialState];
+  const transitions: ExploreReport["transitions"] = [];
+  while (queue.length > 0 && saves.size <= maxStates) {
+    const current = queue.shift() as string;
+    const bytes = saves.get(current) as string;
+    for (const [eventName, eventArgs] of events) {
+      const inst = factory();
+      inst.restore_state(bytes);
+      inst[eventName](...eventArgs);
+      const newState: string = inst.get_state();
+      transitions.push({ from: current, event: eventName, args: eventArgs, to: newState });
+      if (!saves.has(newState)) {
+        saves.set(newState, inst.save_state());
+        queue.push(newState);
+      }
+    }
+  }
+  const hasRealOutgoing = new Set<string>();
+  const hasBeenFrom = new Set<string>();
+  for (const t of transitions) {
+    hasBeenFrom.add(t.from);
+    if (t.from !== t.to) hasRealOutgoing.add(t.from);
+  }
+  const dead_ends: string[] = [];
+  const unreachable: string[] = [];
+  for (const s of saves.keys()) {
+    if (!hasRealOutgoing.has(s)) dead_ends.push(s);
+    if (!hasBeenFrom.has(s) && s !== initialState) unreachable.push(s);
+  }
+  return { initial: initialState, states: [...saves.keys()], transitions, dead_ends, unreachable };
+}
+
 // MilestoneRegistry (scripts/milestone_registry.gd) — (journey, milestone) → save
 // bytes. JourneyTree.walk_to captures a journey's milestones into one.
 export class MilestoneRegistry {

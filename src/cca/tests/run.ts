@@ -102,6 +102,7 @@ import "./test_cca_maze_sweep.cca-test";
 import "./test_cca_restore_soundness_milestones.cca-test";
 import "./test_cca_frame_checker_demo.cca-test";
 import "./test_cca_bfs_restore_property.cca-test";
+import "./test_cca_state_exploration.cca-test";
 
 import { summary } from "./_harness";
 
