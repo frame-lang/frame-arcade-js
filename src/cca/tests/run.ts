@@ -57,6 +57,7 @@ import "./test_cca_dwarf_hitrate_curve.cca-test";
 import "./test_cca_canonical_journey.cca-test";
 import "./test_cca_win_journey.cca-test";
 import "./test_cca_completable_multiseed.cca-test";
+import "./test_cca_canonical.cca-test";
 import "./test_cca_stochastic_probe.cca-test";
 import "./test_cca_stochastic_probe_dispatch.cca-test";
 import "./test_cca_stochastic_probe_y2.cca-test";
