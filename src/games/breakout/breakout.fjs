@@ -25,19 +25,22 @@
         bounce_x()
         bounce_y()
         set_velocity(vx: float, vy: float)
+        tick(dt: float)
         get_state(): string
         get_vx(): float
         get_vy(): float
         is_flying(): bool
+        respawn_progress(): float
 
     machine:
         $AttachedToPaddle {
             launch(vx: float, vy: float) { -> (vx, vy) $InFlight }
 
-            get_state(): string  { @@:("attached") }
-            get_vx(): float      { @@:(0.0) }
-            get_vy(): float      { @@:(0.0) }
-            is_flying(): bool    { @@:(false) }
+            get_state(): string         { @@:("attached") }
+            get_vx(): float             { @@:(0.0) }
+            get_vy(): float             { @@:(0.0) }
+            is_flying(): bool           { @@:(false) }
+            respawn_progress(): float   { @@:(1.0) }
         }
 
         $InFlight {
@@ -59,19 +62,32 @@
 
             lose() { -> $Lost }
 
-            get_state(): string  { @@:("in_flight") }
-            get_vx(): float      { @@:($.vx) }
-            get_vy(): float      { @@:($.vy) }
-            is_flying(): bool    { @@:(true) }
+            get_state(): string         { @@:("in_flight") }
+            get_vx(): float             { @@:($.vx) }
+            get_vy(): float             { @@:($.vy) }
+            is_flying(): bool           { @@:(true) }
+            respawn_progress(): float   { @@:(1.0) }
         }
 
         $Lost {
+            $.elapsed: float = 0.0
+
+            tick(dt: float) {
+                $.elapsed = $.elapsed + dt
+                if ($.elapsed >= 2.0) {
+                    -> $AttachedToPaddle
+                }
+            }
+
             attach() { -> $AttachedToPaddle }
 
-            get_state(): string  { @@:("lost") }
-            get_vx(): float      { @@:(0.0) }
-            get_vy(): float      { @@:(0.0) }
-            is_flying(): bool    { @@:(false) }
+            get_state(): string         { @@:("lost") }
+            get_vx(): float             { @@:(0.0) }
+            get_vy(): float             { @@:(0.0) }
+            is_flying(): bool           { @@:(false) }
+            // 0.0 → 1.0 over the 2-second respawn pause; the scene uses this
+            // as the ball's alpha so it fades back in at the paddle position.
+            respawn_progress(): float   { @@:($.elapsed / 2.0) }
         }
 }
 
@@ -138,6 +154,7 @@
         wall_bounce_x()
         wall_bounce_y()
         ball_fell_off()
+        tick(dt: float)
         pause()
         resume()
         restart()
@@ -150,6 +167,7 @@
         ball_state(): string
         ball_vx(): float
         ball_vy(): float
+        ball_respawn_progress(): float
 
     machine:
         $Attract {
@@ -206,12 +224,13 @@
                 if (this.lives <= 0) {
                     -> $GameOver
                 } else {
-                    // Recycle the ball: it's $InFlight when it falls, so it must
-                    // pass through $Lost before it can re-attach to the paddle.
+                    // Recycle the ball: -> $Lost; the Ball self-attaches after
+                    // a 2-second pause driven by its own $.elapsed state var.
                     this.ball.lose()
-                    this.ball.attach()
                 }
             }
+
+            tick(dt: float) { this.ball.tick(dt) }
 
             pause() { push$ -> $Paused }
 
@@ -224,6 +243,7 @@
             ball_state(): string         { @@:(this.ball.get_state()) }
             ball_vx(): float             { @@:(this.ball.get_vx()) }
             ball_vy(): float             { @@:(this.ball.get_vy()) }
+            ball_respawn_progress(): float { @@:(this.ball.respawn_progress()) }
         }
 
         $LevelClear {

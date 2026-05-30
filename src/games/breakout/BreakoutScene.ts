@@ -16,6 +16,7 @@ export interface BreakoutMachine {
   wall_bounce_x(): void;
   wall_bounce_y(): void;
   ball_fell_off(): void;
+  tick(dt: number): void;
   pause(): void;
   resume(): void;
   restart(): void;
@@ -29,6 +30,7 @@ export interface BreakoutMachine {
   ball_state(): string;
   ball_vx(): number;
   ball_vy(): number;
+  ball_respawn_progress(): number;
 }
 
 const W = 720;
@@ -119,16 +121,28 @@ export class BreakoutScene extends Phaser.Scene {
     const dt = deltaMs / 1000;
     const s = this.m.get_state();
 
-    if ((s === "playing" || s === "level_clear") && this.prev !== s) {
-      // New round / next level: bricks were reset by the machine.
-      this.parkBall();
-    }
+    // On entering any new state that isn't paused, park the ball on the
+    // paddle and reset alpha to fully visible. Otherwise the ball can sit
+    // off-screen (its last in-flight position when it fell) through
+    // GameOver / Attract. Exception: resume (paused → playing) must
+    // preserve the in-flight position so play continues where it left off.
+    const transitioned = this.prev !== s;
+    const cameFromPaused = this.prev === "paused";
     this.prev = s;
+    if (transitioned && s !== "paused" && !cameFromPaused) {
+      this.parkBall();
+      this.ball.setAlpha(1);
+    }
 
     if (s === "playing") {
+      this.m.tick(dt);
       this.movePaddle(dt);
-      if (this.m.ball_state() === "attached") this.parkBall();
-      else if (this.m.ball_state() === "in_flight") this.stepBall(dt);
+      // Ball alpha tracks the Ball's $Lost.$.elapsed (1.0 in attached/in_flight,
+      // 0 → 1 during the 2-second respawn pause).
+      this.ball.setAlpha(this.m.ball_respawn_progress());
+      const bs = this.m.ball_state();
+      if (bs === "in_flight") this.stepBall(dt);
+      else this.parkBall(); // attached *or* lost — the ball rides the paddle
     }
 
     // Brick visibility reflects the machine's brick field.
