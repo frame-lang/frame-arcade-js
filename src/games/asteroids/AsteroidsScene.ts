@@ -50,6 +50,7 @@ const COURT = { x: W, y: H };
 export class AsteroidsScene extends Phaser.Scene {
   private m: AsteroidsMachine;
   private ship!: Phaser.GameObjects.Triangle;
+  private flame!: Phaser.GameObjects.Triangle;     // thrust flame, behind the ship
   private rocks: Phaser.GameObjects.Arc[] = [];     // pool synced to m.field
   private shots: Phaser.GameObjects.Arc[] = [];
   private svx = 0;
@@ -68,6 +69,10 @@ export class AsteroidsScene extends Phaser.Scene {
 
   create(): void {
     this.ship = this.add.triangle(W / 2, H / 2, 0, -12, -9, 10, 9, 10, 0x8ab4f8);
+    // Thrust flame: a small triangle trailing the ship, sharing the ship's
+    // pivot + rotation. Its local vertices point "down" (positive y) so it
+    // emerges from the rear when the ship rotates. Hidden unless UP is held.
+    this.flame = this.add.triangle(W / 2, H / 2, 0, 16, -4, 7, 4, 7, 0xffae42).setVisible(false);
     const mono = { fontFamily: "monospace", color: "#e6e1e8" };
     this.scoreText = this.add.text(12, 10, "", { ...mono, fontSize: "15px" });
     this.stateText = this.add.text(W - 12, 10, "", { ...mono, fontSize: "12px", color: "#7c8499" }).setOrigin(1, 0);
@@ -139,6 +144,15 @@ export class AsteroidsScene extends Phaser.Scene {
 
     this.renderRocks(s);
     this.ship.setVisible(s !== "attract" && s !== "game_over" && this.m.ship.is_visible());
+    // Respawn invulnerability: blink the ship at ~6 Hz so it's clear it can't
+    // be hit. Reset to full opacity outside Respawning.
+    this.ship.setAlpha(
+      this.m.ship.get_state() === "respawning" && (Math.floor(performance.now() / 90) & 1) === 0
+        ? 0.35
+        : 1,
+    );
+    // Flame: only while actively thrusting in Playing.
+    this.updateFlame(s === "playing" && this.keys.UP.isDown);
     this.scoreText.setText(`score ${this.m.get_score()}   ships ${this.m.get_lives()}   wave ${this.m.get_wave()}`);
     this.stateText.setText(`state: ${s}`);
     this.hintText.setText(this.hint(s));
@@ -155,6 +169,17 @@ export class AsteroidsScene extends Phaser.Scene {
     this.svy *= 1 - FRICTION * dt;
     this.ship.x = Phaser.Math.Wrap(this.ship.x + this.svx * dt, 0, W);
     this.ship.y = Phaser.Math.Wrap(this.ship.y + this.svy * dt, 0, H);
+  }
+
+  // Flame trails the ship at the same pivot + rotation; flickers width/length
+  // a touch each frame for that classic 8-bit thruster feel.
+  private updateFlame(visible: boolean): void {
+    this.flame.setVisible(visible && this.m.ship.is_visible());
+    if (!visible) return;
+    this.flame.x = this.ship.x;
+    this.flame.y = this.ship.y;
+    this.flame.rotation = this.ship.rotation;
+    this.flame.setScale(0.85 + Math.random() * 0.3);
   }
 
   private updateBullets(dt: number): void {
