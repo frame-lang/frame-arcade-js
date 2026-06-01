@@ -5,11 +5,14 @@
 // CANONICAL: mirrors the Godot reference
 // (frame-arcade/ch04-asteroids/frame/asteroids.fgd) exactly — same
 // three systems (Ship / AsteroidField / Asteroids), states,
-// transitions, the $InGame HSM parent, the Ship hyperspace
-// push$/pop$ subroutine, the game push$/pop$ pause, the
-// `difficulty` system parameter, and the owned sub-systems. Only
-// action bodies differ (JS): Vector2 becomes a plain {x, y}
-// object, randf()/cos/sin become Math.*, court_size is {x, y}.
+// transitions, the $InGame HSM parent, the game push$/pop$ pause
+// (the three in-game children all inherit it from $InGame so resume
+// returns to whichever was active), private state variables on
+// $InHyperspace ($.timer / $.duration that exist only for the
+// duration of that compartment), the `difficulty` system parameter,
+// and the owned sub-systems. Only action bodies differ (JS):
+// Vector2 becomes a plain {x, y} object, randf()/cos/sin become
+// Math.*, court_size is {x, y}.
 
 @@system Ship {
 
@@ -30,7 +33,6 @@
             hit() { -> $Exploding }
 
             hyperspace() {
-                push$
                 -> $InHyperspace
             }
 
@@ -49,7 +51,7 @@
             tick(dt: float) {
                 $.timer = $.timer + dt
                 if ($.timer >= $.duration) {
-                    -> pop$
+                    -> $Alive
                 }
             }
 
