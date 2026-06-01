@@ -51,8 +51,10 @@ export class AsteroidsScene extends Phaser.Scene {
   private m: AsteroidsMachine;
   private ship!: Phaser.GameObjects.Triangle;
   private flame!: Phaser.GameObjects.Triangle;     // thrust flame, behind the ship
-  private rocks: Phaser.GameObjects.Arc[] = [];     // pool synced to m.field
+  private rocks: Phaser.GameObjects.Polygon[] = [];   // pool synced to m.field
+  private rockShapes: number[][] = [];                // jittered unit-radius polygons, cycled by index
   private shots: Phaser.GameObjects.Arc[] = [];
+  private fragments: { line: Phaser.GameObjects.Line; vx: number; vy: number; age: number }[] = [];
   private svx = 0;
   private svy = 0;
   private fireCool = 0;
@@ -68,11 +70,36 @@ export class AsteroidsScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.ship = this.add.triangle(W / 2, H / 2, 0, -12, -9, 10, 9, 10, 0x8ab4f8);
+    // Triangle vertices chosen so the centroid sits at local (0, 0) — Phaser
+    // rotates Shape around that local origin, so this makes the ship pivot
+    // around its visual center and lets the bullet fire cleanly down the
+    // nose line. Mean of [-14, 7, 7] = 0, mean of [0, -9, 9] = 0.
+    this.ship = this.add.triangle(W / 2, H / 2, 0, -14, -9, 7, 9, 7, 0x8ab4f8);
     // Thrust flame: a small triangle trailing the ship, sharing the ship's
     // pivot + rotation. Its local vertices point "down" (positive y) so it
     // emerges from the rear when the ship rotates. Hidden unless UP is held.
-    this.flame = this.add.triangle(W / 2, H / 2, 0, 16, -4, 7, 4, 7, 0xffae42).setVisible(false);
+    this.flame = this.add.triangle(W / 2, H / 2, 0, 14, -3, 7, 3, 7, 0xffae42).setVisible(false);
+
+    // Pre-generate a handful of jittered unit-radius polygon outlines for
+    // the asteroids — each rock instance picks one by index and scales it
+    // to radius_of(i) at render time. Seeded so the shapes are stable
+    // across page reloads.
+    let seed = 0xa5be0d;
+    const rand = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    for (let k = 0; k < 5; k++) {
+      const sides = 9 + Math.floor(rand() * 3); // 9-11 sides
+      const pts: number[] = [];
+      for (let j = 0; j < sides; j++) {
+        const angle = (j / sides) * Math.PI * 2;
+        const r = 0.78 + rand() * 0.34; // 0.78-1.12 jitter for that rocky look
+        pts.push(Math.cos(angle) * r, Math.sin(angle) * r);
+      }
+      this.rockShapes.push(pts);
+    }
+
     const mono = { fontFamily: "monospace", color: "#e6e1e8" };
     this.scoreText = this.add.text(12, 10, "", { ...mono, fontSize: "15px" });
     this.stateText = this.add.text(W - 12, 10, "", { ...mono, fontSize: "12px", color: "#7c8499" }).setOrigin(1, 0);
@@ -89,11 +116,13 @@ export class AsteroidsScene extends Phaser.Scene {
     else if (s === "game_over") this.m.restart();
     else if (s === "playing" && this.m.ship.can_fire() && this.fireCool <= 0) {
       this.fireCool = 0.22;
-      // Spawn at the nose tip, not the pivot. The triangle's nose vertex is at
-      // local (0, -12), so the muzzle is 12px forward along the ship's heading.
+      // Spawn at the nose tip. With the centroid-at-origin triangle the nose
+      // vertex is at local (0, -14), so the muzzle is 14px forward along the
+      // ship's heading — and the spawn is on the rotation pivot's center
+      // line, so it stays on-axis at every rotation.
       const fx = Math.sin(this.ship.rotation);
       const fy = -Math.cos(this.ship.rotation);
-      const b = this.add.circle(this.ship.x + fx * 12, this.ship.y + fy * 12, 3, 0xffffff);
+      const b = this.add.circle(this.ship.x + fx * 14, this.ship.y + fy * 14, 3, 0xffffff);
       (b as unknown as { vx: number }).vx = fx * BULLET + this.svx;
       (b as unknown as { vy: number }).vy = fy * BULLET + this.svy;
       this.shots.push(b);
@@ -131,9 +160,17 @@ export class AsteroidsScene extends Phaser.Scene {
     if (!this.m.is_paused() && s !== "attract" && s !== "game_over") {
       this.m.tick(dt, COURT);
       const st = this.m.get_state();
+      const shipNow = this.m.ship.get_state();
       // Reset the ship transform the moment it returns to play after dying.
-      if (this.m.ship.get_state() === "respawning" && this.prevShip !== "respawning") this.resetShip();
-      this.prevShip = this.m.ship.get_state();
+      if (shipNow === "respawning" && this.prevShip !== "respawning") this.resetShip();
+      // Spawn the explosion fragments the moment the ship enters Exploding;
+      // the FSM stays in Exploding for 1.0s, the fragments fade out over the
+      // same window and clean themselves up.
+      if (shipNow === "exploding" && this.prevShip !== "exploding") {
+        this.spawnExplosion(this.ship.x, this.ship.y);
+      }
+      this.prevShip = shipNow;
+      this.updateFragments(dt);
 
       if (st === "playing") {
         this.flyShip(dt);
@@ -143,7 +180,15 @@ export class AsteroidsScene extends Phaser.Scene {
     }
 
     this.renderRocks(s);
-    this.ship.setVisible(s !== "attract" && s !== "game_over" && this.m.ship.is_visible());
+    // Hide the ship sprite during Exploding so the fragments tell the story —
+    // the FSM's is_visible() reports true during Exploding (the ship's debris
+    // IS visually present), but the triangle itself shouldn't sit there frozen.
+    this.ship.setVisible(
+      s !== "attract" &&
+        s !== "game_over" &&
+        this.m.ship.is_visible() &&
+        this.m.ship.get_state() !== "exploding",
+    );
     // Respawn invulnerability: blink the ship at ~6 Hz so it's clear it can't
     // be hit. Reset to full opacity outside Respawning.
     this.ship.setAlpha(
@@ -219,19 +264,60 @@ export class AsteroidsScene extends Phaser.Scene {
     }
   }
 
-  // Sync the Arc pool to the machine's field and draw each alive asteroid.
+  // Sync the polygon pool to the machine's field and draw each alive
+  // asteroid. The polygons are unit-radius outlines cycled by index; setScale
+  // grows each to the actual radius reported by the field.
   private renderRocks(s: string): void {
     const showField = s === "playing" || s === "ship_dying" || s === "wave_clear" || s === "paused";
     const n = this.m.field.count();
     while (this.rocks.length < n) {
-      this.rocks.push(this.add.circle(0, 0, 10, 0x9aa4b8, 0).setStrokeStyle(2, 0x9aa4b8));
+      const shape = this.rockShapes[this.rocks.length % this.rockShapes.length];
+      this.rocks.push(
+        this.add
+          .polygon(0, 0, shape, 0x9aa4b8, 0)
+          .setStrokeStyle(2, 0x9aa4b8)
+          .setOrigin(0.5, 0.5),
+      );
     }
     for (let i = 0; i < this.rocks.length; i++) {
       const alive = showField && i < n && this.m.field.is_alive(i);
       this.rocks[i].setVisible(alive);
       if (alive) {
         const p = this.m.field.position(i);
-        this.rocks[i].setPosition(p.x, p.y).setRadius(this.m.field.radius_of(i));
+        this.rocks[i].setPosition(p.x, p.y).setScale(this.m.field.radius_of(i));
+      }
+    }
+  }
+
+  // Explosion fragments — short line segments shooting outward from the ship
+  // position, fading over ~1s (matching the $Exploding duration).
+  private spawnExplosion(x: number, y: number): void {
+    const n = 10;
+    for (let i = 0; i < n; i++) {
+      const angle = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+      const speed = 60 + Math.random() * 90;
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed;
+      const len = 5 + Math.random() * 7;
+      const ax = -Math.cos(angle) * len * 0.5;
+      const ay = -Math.sin(angle) * len * 0.5;
+      const bx = Math.cos(angle) * len * 0.5;
+      const by = Math.sin(angle) * len * 0.5;
+      const line = this.add.line(x, y, ax, ay, bx, by, 0x8ab4f8).setLineWidth(1.5);
+      this.fragments.push({ line, vx, vy, age: 0 });
+    }
+  }
+
+  private updateFragments(dt: number): void {
+    for (let i = this.fragments.length - 1; i >= 0; i--) {
+      const f = this.fragments[i];
+      f.age += dt;
+      f.line.x = Phaser.Math.Wrap(f.line.x + f.vx * dt, 0, W);
+      f.line.y = Phaser.Math.Wrap(f.line.y + f.vy * dt, 0, H);
+      f.line.setAlpha(Math.max(0, 1 - f.age));
+      if (f.age >= 1.0) {
+        f.line.destroy();
+        this.fragments.splice(i, 1);
       }
     }
   }
