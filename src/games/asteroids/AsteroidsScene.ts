@@ -84,9 +84,13 @@ export class AsteroidsScene extends Phaser.Scene {
     else if (s === "game_over") this.m.restart();
     else if (s === "playing" && this.m.ship.can_fire() && this.fireCool <= 0) {
       this.fireCool = 0.22;
-      const b = this.add.circle(this.ship.x, this.ship.y, 3, 0xffffff);
-      (b as unknown as { vx: number }).vx = Math.sin(this.ship.rotation) * BULLET + this.svx;
-      (b as unknown as { vy: number }).vy = -Math.cos(this.ship.rotation) * BULLET + this.svy;
+      // Spawn at the nose tip, not the pivot. The triangle's nose vertex is at
+      // local (0, -12), so the muzzle is 12px forward along the ship's heading.
+      const fx = Math.sin(this.ship.rotation);
+      const fy = -Math.cos(this.ship.rotation);
+      const b = this.add.circle(this.ship.x + fx * 12, this.ship.y + fy * 12, 3, 0xffffff);
+      (b as unknown as { vx: number }).vx = fx * BULLET + this.svx;
+      (b as unknown as { vy: number }).vy = fy * BULLET + this.svy;
       this.shots.push(b);
     }
   }
