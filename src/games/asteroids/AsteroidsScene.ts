@@ -70,15 +70,22 @@ export class AsteroidsScene extends Phaser.Scene {
   }
 
   create(): void {
-    // Triangle vertices chosen so the centroid sits at local (0, 0) — Phaser
-    // rotates Shape around that local origin, so this makes the ship pivot
-    // around its visual center and lets the bullet fire cleanly down the
-    // nose line. Mean of [-14, 7, 7] = 0, mean of [0, -9, 9] = 0.
-    this.ship = this.add.triangle(W / 2, H / 2, 0, -14, -9, 7, 9, 7, 0x8ab4f8);
+    // Triangle vertices chosen so the centroid sits at local (0, 0). But
+    // Phaser's Shape rotates around displayOrigin (= origin * size, where
+    // size = max-of-vertex-coords, not the bounding box), so we ALSO need
+    // setOrigin(0, 0) to force displayOrigin to (0, 0). Together those make
+    // rotation pivot the centroid + put the nose vertex on the rotation
+    // axis so bullets fire down the centerline.
+    this.ship = this.add
+      .triangle(W / 2, H / 2, 0, -14, -9, 7, 9, 7, 0x8ab4f8)
+      .setOrigin(0, 0);
     // Thrust flame: a small triangle trailing the ship, sharing the ship's
     // pivot + rotation. Its local vertices point "down" (positive y) so it
     // emerges from the rear when the ship rotates. Hidden unless UP is held.
-    this.flame = this.add.triangle(W / 2, H / 2, 0, 14, -3, 7, 3, 7, 0xffae42).setVisible(false);
+    this.flame = this.add
+      .triangle(W / 2, H / 2, 0, 14, -3, 7, 3, 7, 0xffae42)
+      .setOrigin(0, 0)
+      .setVisible(false);
 
     // Pre-generate a handful of jittered unit-radius polygon outlines for
     // the asteroids — each rock instance picks one by index and scales it
