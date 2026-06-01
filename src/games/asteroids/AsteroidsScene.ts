@@ -51,8 +51,7 @@ export class AsteroidsScene extends Phaser.Scene {
   private m: AsteroidsMachine;
   private ship!: Phaser.GameObjects.Triangle;
   private flame!: Phaser.GameObjects.Triangle;     // thrust flame, behind the ship
-  private rocks: Phaser.GameObjects.Polygon[] = [];   // pool synced to m.field
-  private rockShapes: number[][] = [];                // jittered unit-radius polygons, cycled by index
+  private rocks: Phaser.GameObjects.Arc[] = [];     // pool synced to m.field
   private shots: Phaser.GameObjects.Arc[] = [];
   private fragments: { line: Phaser.GameObjects.Line; vx: number; vy: number; age: number }[] = [];
   private svx = 0;
@@ -86,26 +85,6 @@ export class AsteroidsScene extends Phaser.Scene {
       .triangle(W / 2, H / 2, 0, 14, -3, 7, 3, 7, 0xffae42)
       .setOrigin(0, 0)
       .setVisible(false);
-
-    // Pre-generate a handful of jittered unit-radius polygon outlines for
-    // the asteroids — each rock instance picks one by index and scales it
-    // to radius_of(i) at render time. Seeded so the shapes are stable
-    // across page reloads.
-    let seed = 0xa5be0d;
-    const rand = (): number => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return seed / 0x7fffffff;
-    };
-    for (let k = 0; k < 5; k++) {
-      const sides = 9 + Math.floor(rand() * 3); // 9-11 sides
-      const pts: number[] = [];
-      for (let j = 0; j < sides; j++) {
-        const angle = (j / sides) * Math.PI * 2;
-        const r = 0.78 + rand() * 0.34; // 0.78-1.12 jitter for that rocky look
-        pts.push(Math.cos(angle) * r, Math.sin(angle) * r);
-      }
-      this.rockShapes.push(pts);
-    }
 
     const mono = { fontFamily: "monospace", color: "#e6e1e8" };
     this.scoreText = this.add.text(12, 10, "", { ...mono, fontSize: "15px" });
@@ -246,13 +225,19 @@ export class AsteroidsScene extends Phaser.Scene {
 
   private checkCollisions(): void {
     const n = this.m.field.count();
-    // bullets vs asteroids
+    // Bullets vs asteroids: pure radial check (bullet's 3px disc vs each
+    // asteroid's circle at radius_of). Bullet treated as a 3-radius circle,
+    // not a point — touching the edge counts as a hit.
+    const BULLET_R = 3;
     for (let bi = this.shots.length - 1; bi >= 0; bi--) {
       const b = this.shots[bi];
       for (let i = 0; i < n; i++) {
         if (!this.m.field.is_alive(i)) continue;
         const p = this.m.field.position(i);
-        if (Phaser.Math.Distance.Between(b.x, b.y, p.x, p.y) < this.m.field.radius_of(i)) {
+        if (
+          Phaser.Math.Distance.Between(b.x, b.y, p.x, p.y) <
+          this.m.field.radius_of(i) + BULLET_R
+        ) {
           this.m.bullet_hit_asteroid(i);
           b.destroy();
           this.shots.splice(bi, 1);
@@ -271,27 +256,22 @@ export class AsteroidsScene extends Phaser.Scene {
     }
   }
 
-  // Sync the polygon pool to the machine's field and draw each alive
-  // asteroid. The polygons are unit-radius outlines cycled by index; setScale
-  // grows each to the actual radius reported by the field.
+  // Sync the circle pool to the machine's field and draw each alive
+  // asteroid. add.circle creates an Arc centered on its position — so the
+  // visual center sits exactly at (p.x, p.y), matching the radial collision
+  // check (Phaser.Math.Distance.Between < radius_of) below.
   private renderRocks(s: string): void {
     const showField = s === "playing" || s === "ship_dying" || s === "wave_clear" || s === "paused";
     const n = this.m.field.count();
     while (this.rocks.length < n) {
-      const shape = this.rockShapes[this.rocks.length % this.rockShapes.length];
-      this.rocks.push(
-        this.add
-          .polygon(0, 0, shape, 0x9aa4b8, 0)
-          .setStrokeStyle(2, 0x9aa4b8)
-          .setOrigin(0.5, 0.5),
-      );
+      this.rocks.push(this.add.circle(0, 0, 10, 0x9aa4b8, 0).setStrokeStyle(2, 0x9aa4b8));
     }
     for (let i = 0; i < this.rocks.length; i++) {
       const alive = showField && i < n && this.m.field.is_alive(i);
       this.rocks[i].setVisible(alive);
       if (alive) {
         const p = this.m.field.position(i);
-        this.rocks[i].setPosition(p.x, p.y).setScale(this.m.field.radius_of(i));
+        this.rocks[i].setPosition(p.x, p.y).setRadius(this.m.field.radius_of(i));
       }
     }
   }
