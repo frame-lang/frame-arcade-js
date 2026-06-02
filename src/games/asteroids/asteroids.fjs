@@ -282,7 +282,7 @@
 }
 
 @@[main]
-@@system Asteroids(difficulty: int = 2) {
+@@system AsteroidsGame(difficulty: int = 2) {
 
     operations:
         current_state(): string { @@:(@@:system.state) }
