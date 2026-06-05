@@ -32,7 +32,7 @@ export interface StealthMachine {
   tick(dt: number, pos1: Vec, pos2: Vec, pos3: Vec): void;
   guard_caught_player(i: number): void;
   player_at_exit(): void;
-  current_state(): string;
+  get_current_state_name(): string;
   get_state(): string;
   get_elapsed(): number;
   get_caught_by(): number;

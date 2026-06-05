@@ -28,7 +28,7 @@ export interface PlatformerMachine {
   pause(): void;
   resume(): void;
   is_paused(): boolean;
-  current_state(): string;
+  get_current_state_name(): string;
   locomotion_state(): string;
   form(): string;
   wants_velocity_x(): number;

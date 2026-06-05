@@ -29,7 +29,7 @@ export interface InvadersMachine {
   player_hit(): void;
   fleet_reached_edge(): void;
   fleet_reached_bottom(): void;
-  current_state(): string;
+  get_current_state_name(): string;
   get_state(): string;
   get_score(): number;
   get_lives(): number;

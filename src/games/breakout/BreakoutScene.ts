@@ -20,7 +20,7 @@ export interface BreakoutMachine {
   pause(): void;
   resume(): void;
   restart(): void;
-  current_state(): string;
+  get_current_state_name(): string;
   get_state(): string;
   get_score(): number;
   get_lives(): number;

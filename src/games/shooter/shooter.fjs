@@ -471,7 +471,7 @@
 @@system Shooter {
 
     operations:
-        current_state(): string { @@:(@@:system.state) }
+        get_current_state_name(): string { @@:(@@:system.state) }
 
     interface:
         start()

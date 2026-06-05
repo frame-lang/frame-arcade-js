@@ -16,7 +16,7 @@ export interface GhostGameMachine {
   power_pellet_picked_up(): void;
   ghost_caught(index: number): void;
   ghost_arrived_at_pen(index: number): void;
-  current_state(): string;
+  get_current_state_name(): string;
   get_phase(): string;
   is_frightened(): boolean;
   ghost_count(): number;
