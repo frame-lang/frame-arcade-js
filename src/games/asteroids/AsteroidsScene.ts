@@ -10,7 +10,7 @@ import Phaser from "phaser";
  * hyperspace.
  */
 interface ShipSub {
-  get_state(): string;
+  get_current_state_name(): string;
   is_visible(): boolean;
   can_fire(): boolean;
 }
@@ -29,11 +29,11 @@ export interface AsteroidsMachine {
   ship_hit_asteroid(index: number): void;
   bullet_hit_asteroid(index: number): void;
   ship_hyperspace(): void;
-  current_state(): string;
-  get_state(): string;
+  get_current_state_name(): string;
   get_score(): number;
   get_lives(): number;
   get_wave(): number;
+  get_difficulty(): number;
   is_paused(): boolean;
   ship: ShipSub;
   field: FieldSub;
@@ -57,11 +57,10 @@ export class AsteroidsScene extends Phaser.Scene {
   private svx = 0;
   private svy = 0;
   private fireCool = 0;
-  private prevShip = "";
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private scoreText!: Phaser.GameObjects.Text;
   private stateText!: Phaser.GameObjects.Text;
-  private hintText!: Phaser.GameObjects.Text;
+  private centerText!: Phaser.GameObjects.Text;
 
   constructor(machine: AsteroidsMachine) {
     super("Asteroids");
@@ -86,21 +85,28 @@ export class AsteroidsScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setVisible(false);
 
+    // HUD mirrors Godot main.gd's label layout: SCORE / LIVES / WAVE / DIFF
+    // across the top; big centered text for Attract / WaveClear / Paused /
+    // GameOver messaging. The small per-state hint that used to live at the
+    // bottom is gone — its job is now the centerText overlay.
     const mono = { fontFamily: "monospace", color: "#e6e1e8" };
-    this.scoreText = this.add.text(12, 10, "", { ...mono, fontSize: "15px" });
+    this.scoreText = this.add.text(12, 10, "", { ...mono, fontSize: "16px" });
     this.stateText = this.add.text(W - 12, 10, "", { ...mono, fontSize: "12px", color: "#7c8499" }).setOrigin(1, 0);
-    this.hintText = this.add.text(W / 2, H - 22, "", { ...mono, fontSize: "14px", color: "#9aa4b8" }).setOrigin(0.5);
+    this.centerText = this.add
+      .text(W / 2, H * 0.4, "", { ...mono, fontSize: "26px", align: "center" })
+      .setOrigin(0.5, 0);
     this.keys = this.input.keyboard!.addKeys("LEFT,RIGHT,UP") as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.on("keydown-SPACE", () => this.onSpace());
     this.input.keyboard!.on("keydown-H", () => this.onHyper());
     this.input.keyboard!.on("keydown-P", () => this.onPause());
+    // Match Godot: R restarts from $GameOver; any key starts from $Attract.
+    this.input.keyboard!.on("keydown-R", () => this.onR());
+    this.input.keyboard!.on("keydown", () => this.onAnyKey());
   }
 
   private onSpace(): void {
-    const s = this.m.get_state();
-    if (s === "attract") { this.m.start(); this.resetShip(); }
-    else if (s === "game_over") this.m.restart();
-    else if (s === "playing" && this.m.ship.can_fire() && this.fireCool <= 0) {
+    const s = this.m.get_current_state_name();
+    if (s === "Playing" && this.m.ship.can_fire() && this.fireCool <= 0) {
       this.fireCool = 0.22;
       // Spawn at the nose tip. With the centroid-at-origin triangle the nose
       // vertex is at local (0, -14), so the muzzle is 14px forward along the
@@ -116,20 +122,48 @@ export class AsteroidsScene extends Phaser.Scene {
   }
 
   private onHyper(): void {
-    if (this.m.get_state() === "playing") {
+    // Just ask the FSM. Ship.$Alive.hyperspace() transitions to
+    // $InHyperspace, whose $>() handler calls our warp_out() host method
+    // to randomise position + zero velocity. The scene doesn't need to
+    // know what "hyperspace" means visually — Frame already announced it.
+    if (this.m.get_current_state_name() === "Playing") {
       this.m.ship_hyperspace();
-      this.ship.setPosition(Phaser.Math.Between(40, W - 40), Phaser.Math.Between(40, H - 40));
-      this.svx = 0;
-      this.svy = 0;
     }
   }
 
   private onPause(): void {
     if (this.m.is_paused()) this.m.resume();
-    else if (this.m.get_state() === "playing" || this.m.get_state() === "ship_dying") this.m.pause();
+    else if (this.m.get_current_state_name() === "Playing" || this.m.get_current_state_name() === "ShipDying") this.m.pause();
   }
 
-  private resetShip(): void {
+  // R restarts from $GameOver (matches Godot's KEY_R handler). Any other
+  // state ignores R, which means R during gameplay is a no-op — same as
+  // Godot.
+  private onR(): void {
+    if (this.m.get_current_state_name() === "GameOver") this.m.restart();
+  }
+
+  // Any key advances $Attract → $Playing (matches Godot's
+  // Input.is_anything_pressed() check in the Attract branch). Wired to
+  // the generic "keydown" event so SPACE, arrows, H, P, R, etc. all start
+  // the game from the attract screen.
+  private onAnyKey(): void {
+    if (this.m.get_current_state_name() === "Attract") this.m.start();
+  }
+
+  // -------- ShipHost surface --------
+  // Public methods called from Ship's $> / <$ handlers via the host proxy
+  // wired in src/game.ts. Each is a one-shot effect at a state boundary;
+  // continuous queries (is_visible, can_fire, …) stay on the FSM interface
+  // and are polled per-frame from update().
+
+  /** $Exploding.$>() — scatter debris from the ship's last position. */
+  spawn_explosion(): void {
+    this.spawnExplosion(this.ship.x, this.ship.y);
+  }
+
+  /** $Respawning.$>() — recentre the ship, zero its velocity, clear bullets. */
+  reset_ship(): void {
     this.ship.setPosition(W / 2, H / 2);
     this.ship.rotation = 0;
     this.svx = 0;
@@ -138,27 +172,38 @@ export class AsteroidsScene extends Phaser.Scene {
     this.shots = [];
   }
 
+  /** $InHyperspace.$>() — pick a fresh location for the re-emergence. */
+  warp_out(): void {
+    this.ship.setPosition(
+      Phaser.Math.Between(40, W - 40),
+      Phaser.Math.Between(40, H - 40),
+    );
+    this.svx = 0;
+    this.svy = 0;
+  }
+
+  /** $InHyperspace.<$() — no-op for now; reserve for a re-entry flash. */
+  warp_in(): void {
+    // Intentionally empty — the visible blink-in is just the sprite becoming
+    // is_visible() === true again on the next frame.
+  }
+
   update(_t: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
-    const s = this.m.get_state();
+    const s = this.m.get_current_state_name();
     this.fireCool = Math.max(0, this.fireCool - dt);
 
-    if (!this.m.is_paused() && s !== "attract" && s !== "game_over") {
+    if (!this.m.is_paused() && s !== "Attract" && s !== "GameOver") {
+      // Drive the FSM. Discrete moments (the ship entering $Exploding /
+      // $Respawning / $InHyperspace) are now announced by Frame's $> / <$
+      // handlers calling back into our host methods below — no prev/curr
+      // polling on the scene side. The scene's only contract with the FSM
+      // for these is to *implement* the host methods correctly.
       this.m.tick(dt, COURT);
-      const st = this.m.get_state();
-      const shipNow = this.m.ship.get_state();
-      // Reset the ship transform the moment it returns to play after dying.
-      if (shipNow === "respawning" && this.prevShip !== "respawning") this.resetShip();
-      // Spawn the explosion fragments the moment the ship enters Exploding;
-      // the FSM stays in Exploding for 1.0s, the fragments fade out over the
-      // same window and clean themselves up.
-      if (shipNow === "exploding" && this.prevShip !== "exploding") {
-        this.spawnExplosion(this.ship.x, this.ship.y);
-      }
-      this.prevShip = shipNow;
+      const st = this.m.get_current_state_name();
       this.updateFragments(dt);
 
-      if (st === "playing") {
+      if (st === "Playing") {
         this.flyShip(dt);
         this.updateBullets(dt);
         this.checkCollisions();
@@ -170,23 +215,28 @@ export class AsteroidsScene extends Phaser.Scene {
     // the FSM's is_visible() reports true during Exploding (the ship's debris
     // IS visually present), but the triangle itself shouldn't sit there frozen.
     this.ship.setVisible(
-      s !== "attract" &&
-        s !== "game_over" &&
+      s !== "Attract" &&
+        s !== "GameOver" &&
         this.m.ship.is_visible() &&
-        this.m.ship.get_state() !== "exploding",
+        this.m.ship.get_current_state_name() !== "Exploding",
     );
     // Respawn invulnerability: blink the ship at ~6 Hz so it's clear it can't
     // be hit. Reset to full opacity outside Respawning.
     this.ship.setAlpha(
-      this.m.ship.get_state() === "respawning" && (Math.floor(performance.now() / 90) & 1) === 0
+      this.m.ship.get_current_state_name() === "Respawning" && (Math.floor(performance.now() / 90) & 1) === 0
         ? 0.35
         : 1,
     );
     // Flame: only while actively thrusting in Playing.
-    this.updateFlame(s === "playing" && this.keys.UP.isDown);
-    this.scoreText.setText(`score ${this.m.get_score()}   ships ${this.m.get_lives()}   wave ${this.m.get_wave()}`);
+    this.updateFlame(s === "Playing" && this.keys.UP.isDown);
+    // Same HUD layout as the Godot driver — SCORE / LIVES / WAVE / DIFF
+    // across the top, zero-padded score so the column doesn't jitter.
+    const score = this.m.get_score().toString().padStart(5, "0");
+    this.scoreText.setText(
+      `SCORE ${score}   LIVES ${this.m.get_lives()}   WAVE ${this.m.get_wave()}   DIFF ${this.m.get_difficulty()}`,
+    );
     this.stateText.setText(`state: ${s}`);
-    this.hintText.setText(this.hint(s));
+    this.centerText.setText(this.centerMessage(s));
   }
 
   private flyShip(dt: number): void {
@@ -261,7 +311,7 @@ export class AsteroidsScene extends Phaser.Scene {
   // visual center sits exactly at (p.x, p.y), matching the radial collision
   // check (Phaser.Math.Distance.Between < radius_of) below.
   private renderRocks(s: string): void {
-    const showField = s === "playing" || s === "ship_dying" || s === "wave_clear" || s === "paused";
+    const showField = s === "Playing" || s === "ShipDying" || s === "WaveClear" || s === "Paused";
     const n = this.m.field.count();
     while (this.rocks.length < n) {
       this.rocks.push(this.add.circle(0, 0, 10, 0x9aa4b8, 0).setStrokeStyle(2, 0x9aa4b8));
@@ -309,14 +359,16 @@ export class AsteroidsScene extends Phaser.Scene {
     }
   }
 
-  private hint(s: string): string {
+  // Mirrors main.gd's label_center text per state (Godot ch04-asteroids).
+  // Attract advertises the controls; GameOver tells the player to press R
+  // (matched by onR() above); Playing leaves the canvas clean.
+  private centerMessage(s: string): string {
     switch (s) {
-      case "attract": return "SPACE to start";
-      case "playing": return "←/→ turn  ·  ↑ thrust  ·  SPACE fire  ·  H hyperspace  ·  P pause";
-      case "ship_dying": return "";
-      case "wave_clear": return "Wave clear!";
-      case "paused": return "P to resume";
-      case "game_over": return "Game over  ·  SPACE to restart";
+      case "Attract":
+        return "A S T E R O I D S\n\nPress any key to start\n(H = hyperspace, P = pause)";
+      case "WaveClear": return "WAVE CLEAR";
+      case "Paused": return "PAUSED";
+      case "GameOver": return "GAME OVER\n\nPress R to restart";
       default: return "";
     }
   }

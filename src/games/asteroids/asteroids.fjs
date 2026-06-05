@@ -14,7 +14,22 @@
 // Vector2 becomes a plain {x, y} object, randf()/cos/sin become
 // Math.*, court_size is {x, y}.
 
-@@system Ship {
+// Ship — predicate-pull for continuous state, host-push for one-shot moments.
+//
+// Continuous queries (can_fire / can_be_hit / is_visible / is_alive /
+// get_lives) stay on the interface: the renderer polls them every frame
+// and is a pure function of the answers. They're idempotent and
+// renderer-agnostic.
+//
+// Discrete transition effects fire from $> / <$ handlers into a `host`
+// object passed at construction. The host is a tiny adapter implemented
+// once per renderer (AsteroidsScene.ts for Phaser, main.gd for Godot) —
+// each turns the abstract event into its idiomatic effect. Same .fjs/.fgd
+// body, target-appropriate side effects.
+@@system Ship(host: any) {
+
+    operations:
+        get_current_state_name(): string { @@:(@@:system.state) }
 
     interface:
         tick(dt: float)
@@ -25,7 +40,6 @@
         can_be_hit(): bool
         is_visible(): bool
         is_alive(): bool
-        get_state(): string
         get_lives(): int
 
     machine:
@@ -40,7 +54,6 @@
             can_be_hit(): bool  { @@:(true) }
             is_visible(): bool  { @@:(true) }
             is_alive(): bool    { @@:(true) }
-            get_state(): string { @@:("alive") }
             get_lives(): int    { @@:(this.lives_remaining) }
         }
 
@@ -48,10 +61,13 @@
             $.timer: float = 0.0
             $.duration: float = 0.4
 
+            $>() { this.host.warp_out() }
+            <$() { this.host.warp_in() }
+
             tick(dt: float) {
                 $.timer = $.timer + dt
                 if ($.timer >= $.duration) {
-                    -> $Alive
+                    -> "warp complete" $Alive
                 }
             }
 
@@ -59,7 +75,6 @@
             can_be_hit(): bool  { @@:(false) }
             is_visible(): bool  { @@:(false) }
             is_alive(): bool    { @@:(true) }
-            get_state(): string { @@:("hyperspace") }
             get_lives(): int    { @@:(this.lives_remaining) }
         }
 
@@ -67,14 +82,19 @@
             $.timer: float = 0.0
             $.duration: float = 1.0
 
+            // One-shot effect: scatter debris from the ship's last position.
+            // The scene knows where the sprite is; the FSM only announces
+            // that an explosion has begun.
+            $>() { this.host.spawn_explosion() }
+
             tick(dt: float) {
                 $.timer = $.timer + dt
                 if ($.timer >= $.duration) {
                     this.lives_remaining = this.lives_remaining - 1
                     if (this.lives_remaining <= 0) {
-                        -> $Dead
+                        -> "no lives left" $Dead
                     } else {
-                        -> $Respawning
+                        -> "lives remain" $Respawning
                     }
                 }
             }
@@ -83,7 +103,6 @@
             can_be_hit(): bool  { @@:(false) }
             is_visible(): bool  { @@:(true) }
             is_alive(): bool    { @@:(false) }
-            get_state(): string { @@:("exploding") }
             get_lives(): int    { @@:(this.lives_remaining) }
         }
 
@@ -91,10 +110,15 @@
             $.timer: float = 0.0
             $.duration: float = 2.0
 
+            // One-shot effect: place the ship at center with zero velocity.
+            // The render-layer choice (snap vs. tween, particle flash) is
+            // entirely up to the host.
+            $>() { this.host.reset_ship() }
+
             tick(dt: float) {
                 $.timer = $.timer + dt
                 if ($.timer >= $.duration) {
-                    -> $Alive
+                    -> "invuln expired" $Alive
                 }
             }
 
@@ -102,7 +126,6 @@
             can_be_hit(): bool  { @@:(false) }
             is_visible(): bool  { @@:(true) }
             is_alive(): bool    { @@:(true) }
-            get_state(): string { @@:("respawning") }
             get_lives(): int    { @@:(this.lives_remaining) }
         }
 
@@ -116,11 +139,11 @@
             can_be_hit(): bool  { @@:(false) }
             is_visible(): bool  { @@:(false) }
             is_alive(): bool    { @@:(false) }
-            get_state(): string { @@:("dead") }
             get_lives(): int    { @@:(0) }
         }
 
     domain:
+        host: any = host
         lives_remaining: int = 3
         starting_lives: int = 3
 }
@@ -282,10 +305,10 @@
 }
 
 @@[main]
-@@system AsteroidsGame(difficulty: int = 2) {
+@@system AsteroidsGame(difficulty: int = 2, ship_host: any = null) {
 
     operations:
-        current_state(): string { @@:(@@:system.state) }
+        get_current_state_name(): string { @@:(@@:system.state) }
 
     interface:
         start()
@@ -296,7 +319,6 @@
         ship_hit_asteroid(index: int)
         bullet_hit_asteroid(index: int)
         ship_hyperspace()
-        get_state(): string
         get_score(): int
         get_lives(): int
         get_wave(): int
@@ -316,7 +338,6 @@
                 -> $Playing
             }
 
-            get_state(): string     { @@:("attract") }
             get_score(): int        { @@:(this.score) }
             get_lives(): int        { @@:(this.ship.get_lives()) }
             get_wave(): int         { @@:(this.wave) }
@@ -329,7 +350,6 @@
                 push$ -> $Paused
             }
 
-            get_state(): string     { @@:("in_game") }
             get_score(): int        { @@:(this.score) }
             get_lives(): int        { @@:(this.ship.get_lives()) }
             get_wave(): int         { @@:(this.wave) }
@@ -357,7 +377,7 @@
                     let sz = this._size_points(index)
                     this.score = this.score + sz * this.difficulty
                     if (this.field.alive_count() <= 0) {
-                        -> $WaveClear
+                        -> "all asteroids cleared" $WaveClear
                     }
                 }
             }
@@ -366,7 +386,6 @@
                 this.ship.hyperspace()
             }
 
-            get_state(): string { @@:("playing") }
             => $^
         }
 
@@ -375,14 +394,13 @@
                 this.last_court_size = court_size
                 this.ship.tick(dt)
                 this.field.advance(dt, court_size)
-                if (this.ship.get_state() == "respawning") {
-                    -> $Playing
-                } else if (this.ship.get_state() == "dead") {
-                    -> $GameOver
+                if (this.ship.get_current_state_name() == "Respawning") {
+                    -> "ship respawning" $Playing
+                } else if (this.ship.get_current_state_name() == "Dead") {
+                    -> "no lives left" $GameOver
                 }
             }
 
-            get_state(): string { @@:("ship_dying") }
             => $^
         }
 
@@ -398,11 +416,10 @@
                 if (this.wave_timer >= this.wave_pause) {
                     this.wave = this.wave + 1
                     this.field.spawn_wave(this._asteroids_for_wave(this.wave), court_size)
-                    -> $Playing
+                    -> "next wave" $Playing
                 }
             }
 
-            get_state(): string { @@:("wave_clear") }
             => $^
         }
 
@@ -411,7 +428,6 @@
                 -> pop$
             }
 
-            get_state(): string     { @@:("paused") }
             get_score(): int        { @@:(this.score) }
             get_lives(): int        { @@:(this.ship.get_lives()) }
             get_wave(): int         { @@:(this.wave) }
@@ -424,7 +440,6 @@
                 -> $Attract
             }
 
-            get_state(): string     { @@:("game_over") }
             get_score(): int        { @@:(this.score) }
             get_lives(): int        { @@:(this.ship.get_lives()) }
             get_wave(): int         { @@:(this.wave) }
@@ -452,6 +467,6 @@
         wave_timer: float = 0.0
         wave_pause: float = 2.0
         last_court_size: Vector2 = { x: 640.0, y: 480.0 }
-        ship = @@Ship()
+        ship = @@Ship(ship_host)
         field = @@AsteroidField()
 }
