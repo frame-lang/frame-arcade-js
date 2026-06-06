@@ -144,7 +144,7 @@
 @@system Breakout {
 
     operations:
-        get_current_state_name(): string { @@:(@@:system.state) }
+        get_current_state_name(): string { @@:(@@:system.state.name) }
 
     interface:
         start()

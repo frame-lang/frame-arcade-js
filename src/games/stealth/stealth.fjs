@@ -216,7 +216,7 @@
 @@system Stealth {
 
     operations:
-        get_current_state_name(): string { @@:(@@:system.state) }
+        get_current_state_name(): string { @@:(@@:system.state.name) }
 
     interface:
         start(p1: list, p2: list, p3: list)

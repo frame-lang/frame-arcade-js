@@ -29,7 +29,7 @@
 @@system Ship(host: any) {
 
     operations:
-        get_current_state_name(): string { @@:(@@:system.state) }
+        get_current_state_name(): string { @@:(@@:system.state.name) }
 
     interface:
         tick(dt: float)
@@ -308,7 +308,7 @@
 @@system AsteroidsGame(difficulty: int = 2, ship_host: any = null) {
 
     operations:
-        get_current_state_name(): string { @@:(@@:system.state) }
+        get_current_state_name(): string { @@:(@@:system.state.name) }
 
     interface:
         start()

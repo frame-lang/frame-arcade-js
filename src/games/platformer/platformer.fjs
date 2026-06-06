@@ -333,7 +333,7 @@
 @@system Platformer {
 
     operations:
-        get_current_state_name(): string { @@:(@@:system.state) }
+        get_current_state_name(): string { @@:(@@:system.state.name) }
 
     interface:
         tick(dt: float)
