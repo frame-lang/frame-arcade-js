@@ -70,7 +70,10 @@ export class PongScene extends Phaser.Scene {
     this.input.keyboard!.on("keydown-SPACE", () => this.onAction());
     this.input.keyboard!.on("keydown-P", () => this.onPause());
 
-    this.centerBall();
+    // Initial ball position: park it next to whichever paddle will serve
+    // first. update() will keep it pinned to that paddle while in
+    // Serving — but during Attract the ball still sits there visibly.
+    this.parkBall();
   }
 
   private onAction(): void {
@@ -87,14 +90,27 @@ export class PongScene extends Phaser.Scene {
     else if (s === "paused") this.m.resume();
   }
 
-  private centerBall(): void {
-    this.ball.setPosition(GAME_W / 2, GAME_H / 2);
+  // Park the ball next to whichever paddle is about to serve, so it
+  // visually sits on the paddle and tracks its Y while the player lines
+  // up before pressing SPACE. Serve direction +1 means the ball will
+  // travel right (left paddle serves); -1 means it'll travel left
+  // (right paddle serves).
+  private parkBall(): void {
+    const dir = this.m.get_serve_direction() >= 0 ? 1 : -1;
+    if (dir === 1) {
+      this.ball.x = this.left.x + (PADDLE_W + BALL) / 2;
+      this.ball.y = this.left.y;
+    } else {
+      this.ball.x = this.right.x - (PADDLE_W + BALL) / 2;
+      this.ball.y = this.right.y;
+    }
     this.bvx = 0;
     this.bvy = 0;
   }
 
-  // Serve in the machine-chosen direction (classic Pong: toward the
-  // player who just lost the point). serving_to is +1 right / -1 left.
+  // Set the initial velocity at the moment of serve. The ball is
+  // already parked next to the serving paddle; this just gives it a
+  // direction and a slight vertical spread.
   private launch(): void {
     const dir = this.m.get_serve_direction() >= 0 ? 1 : -1;
     const angle = Phaser.Math.FloatBetween(-0.35, 0.35);
@@ -106,27 +122,36 @@ export class PongScene extends Phaser.Scene {
     const dt = deltaMs / 1000;
     const s = this.m.get_state();
 
-    // Re-center the ball when a new point begins or the game resets.
-    if ((s === "serving" || s === "attract") && this.prev !== s) this.centerBall();
-    this.prev = s;
+    // Paddle input runs whenever the rally is active OR the player is
+    // about to serve, so they can line up before pressing SPACE.
+    if (s === "serving" || s === "in_play") this.movePaddles(dt);
 
-    if (s === "in_play") this.stepRally(dt);
+    // While serving, keep the ball pinned to the serving paddle so its
+    // Y matches what the player sees.
+    if (s === "serving") this.parkBall();
+
+    if (s === "in_play") this.stepBall(dt);
 
     this.scoreText.setText(`${this.m.get_score_left()} : ${this.m.get_score_right()}`);
     this.stateText.setText(`state: ${s}`);
     this.hintText.setText(this.hint(s));
+    this.prev = s;
   }
 
-  private stepRally(dt: number): void {
+  private movePaddles(dt: number): void {
     if (this.keys.W.isDown || this.keys.UP.isDown) this.left.y -= PADDLE_SPEED * dt;
     if (this.keys.S.isDown || this.keys.DOWN.isDown) this.left.y += PADDLE_SPEED * dt;
     this.clamp(this.left);
 
-    // right paddle: simple tracking AI
+    // Right paddle: simple tracking AI. While serving, the ball is
+    // pinned to the serving paddle's Y, so the AI naturally stays
+    // still (or follows itself harmlessly if it's the server).
     const dy = this.ball.y - this.right.y;
     this.right.y += Phaser.Math.Clamp(dy, -PADDLE_SPEED * dt, PADDLE_SPEED * dt);
     this.clamp(this.right);
+  }
 
+  private stepBall(dt: number): void {
     this.ball.x += this.bvx * dt;
     this.ball.y += this.bvy * dt;
     if (this.ball.y < BALL / 2) { this.ball.y = BALL / 2; this.bvy = Math.abs(this.bvy); }
