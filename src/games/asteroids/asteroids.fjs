@@ -36,6 +36,7 @@
         hit()
         hyperspace()
         respawn()
+        fire()
         can_fire(): bool
         can_be_hit(): bool
         is_visible(): bool
@@ -44,13 +45,31 @@
 
     machine:
         $Alive {
+            // Fire cooldown — state-local because it only ticks down
+            // while the ship is Alive. Other states either can't fire
+            // ($InHyperspace/$Exploding/$Dead) or get a free shot
+            // ($Respawning, which is the invuln respawn beat). The
+            // scene calls ship.fire() after spawning a bullet, which
+            // resets the timer.
+            $.cooldown: float = 0.0
+
+            tick(dt: float) {
+                if ($.cooldown > 0.0) {
+                    $.cooldown = $.cooldown - dt
+                }
+            }
+
+            fire() {
+                $.cooldown = 0.22
+            }
+
             hit() { -> $Exploding }
 
             hyperspace() {
                 -> $InHyperspace
             }
 
-            can_fire(): bool    { @@:(true) }
+            can_fire(): bool    { @@:($.cooldown <= 0.0) }
             can_be_hit(): bool  { @@:(true) }
             is_visible(): bool  { @@:(true) }
             is_alive(): bool    { @@:(true) }

@@ -13,6 +13,7 @@ interface ShipSub {
   get_current_state_name(): string;
   is_visible(): boolean;
   can_fire(): boolean;
+  fire(): void;
 }
 interface FieldSub {
   count(): number;
@@ -56,7 +57,6 @@ export class AsteroidsScene extends Phaser.Scene {
   private fragments: { line: Phaser.GameObjects.Line; vx: number; vy: number; age: number }[] = [];
   private svx = 0;
   private svy = 0;
-  private fireCool = 0;
   private keys!: Record<string, Phaser.Input.Keyboard.Key>;
   private scoreText!: Phaser.GameObjects.Text;
   private stateText!: Phaser.GameObjects.Text;
@@ -106,8 +106,12 @@ export class AsteroidsScene extends Phaser.Scene {
 
   private onSpace(): void {
     const s = this.m.get_current_state_name();
-    if (s === "Playing" && this.m.ship.can_fire() && this.fireCool <= 0) {
-      this.fireCool = 0.22;
+    if (s === "Playing" && this.m.ship.can_fire()) {
+      // The FSM owns the cooldown — fire() resets Ship.$Alive's $.cooldown
+      // state-local; can_fire() above already reflects whether we're past
+      // it. After this, can_fire() returns false until tick() drains
+      // the cooldown back to zero.
+      this.m.ship.fire();
       // Spawn at the nose tip. With the centroid-at-origin triangle the nose
       // vertex is at local (0, -14), so the muzzle is 14px forward along the
       // ship's heading — and the spawn is on the rotation pivot's center
@@ -191,7 +195,6 @@ export class AsteroidsScene extends Phaser.Scene {
   update(_t: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
     const s = this.m.get_current_state_name();
-    this.fireCool = Math.max(0, this.fireCool - dt);
 
     if (!this.m.is_paused() && s !== "Attract" && s !== "GameOver") {
       // Drive the FSM. Discrete moments (the ship entering $Exploding /
