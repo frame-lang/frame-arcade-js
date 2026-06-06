@@ -13,7 +13,7 @@ export interface PongMachine {
   resume(): void;
   ball_out_left(): void;
   ball_out_right(): void;
-  get_state(): string;
+  get_current_state_name(): string;
   get_score_left(): number;
   get_score_right(): number;
   get_serve_direction(): number;
@@ -77,17 +77,17 @@ export class PongScene extends Phaser.Scene {
   }
 
   private onAction(): void {
-    switch (this.m.get_state()) {
-      case "attract": this.m.start(); break;
-      case "serving": this.m.launch(); this.launch(); break;
-      case "game_over": this.m.restart(); break;
+    switch (this.m.get_current_state_name()) {
+      case "AttractMode": this.m.start(); break;
+      case "Serving": this.m.launch(); this.launch(); break;
+      case "GameOver": this.m.restart(); break;
     }
   }
 
   private onPause(): void {
-    const s = this.m.get_state();
-    if (s === "serving" || s === "in_play") this.m.pause();
-    else if (s === "paused") this.m.resume();
+    const s = this.m.get_current_state_name();
+    if (s === "Serving" || s === "InPlay") this.m.pause();
+    else if (s === "Paused") this.m.resume();
   }
 
   // Park the ball next to whichever paddle is about to serve, so it
@@ -120,17 +120,17 @@ export class PongScene extends Phaser.Scene {
 
   update(_time: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
-    const s = this.m.get_state();
+    const s = this.m.get_current_state_name();
 
     // Paddle input runs whenever the rally is active OR the player is
     // about to serve, so they can line up before pressing SPACE.
-    if (s === "serving" || s === "in_play") this.movePaddles(dt);
+    if (s === "Serving" || s === "InPlay") this.movePaddles(dt);
 
     // While serving, keep the ball pinned to the serving paddle so its
     // Y matches what the player sees.
-    if (s === "serving") this.parkBall();
+    if (s === "Serving") this.parkBall();
 
-    if (s === "in_play") this.stepBall(dt);
+    if (s === "InPlay") this.stepBall(dt);
 
     this.scoreText.setText(`${this.m.get_score_left()} : ${this.m.get_score_right()}`);
     this.stateText.setText(`state: ${s}`);
@@ -183,11 +183,11 @@ export class PongScene extends Phaser.Scene {
 
   private hint(s: string): string {
     switch (s) {
-      case "attract": return "SPACE to start";
-      case "serving": return "SPACE to serve  ·  W/S move  ·  P pause";
-      case "in_play": return "W/S move  ·  P pause";
-      case "paused": return "P to resume";
-      case "game_over":
+      case "AttractMode": return "SPACE to start";
+      case "Serving": return "SPACE to serve  ·  W/S move  ·  P pause";
+      case "InPlay": return "W/S move  ·  P pause";
+      case "Paused": return "P to resume";
+      case "GameOver":
         return `${this.m.get_winner().toUpperCase()} wins!  ·  SPACE to play again`;
       default: return "";
     }

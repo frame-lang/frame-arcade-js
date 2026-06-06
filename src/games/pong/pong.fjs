@@ -22,11 +22,11 @@
 // get_winner, is_playing.
 @@system Pong {
 
-    // Host-integration helper for the arcade visualizer only (not part
-    // of the canonical FSM): returns the raw Frame state name so the
-    // shell can highlight the live node in the .dot chart. Game logic
-    // uses the canonical get_state() below.
     operations:
+        // Single source of truth for the current state name. Replaces the
+        // per-state get_state() overrides that used to hardcode a
+        // snake_case string per state. Returns the Frame compartment
+        // name verbatim (PascalCase, matches the .dot diagram labels).
         get_current_state_name(): string { @@:(@@:system.state.name) }
 
     interface:
@@ -38,7 +38,6 @@
         tick()
         ball_out_left()
         ball_out_right()
-        get_state(): string
         get_score_left(): int
         get_score_right(): int
         get_serve_direction(): int
@@ -55,7 +54,6 @@
 
             start() { -> $Serving }
 
-            get_state(): string          { @@:("attract") }
             get_score_left(): int        { @@:(this.score_left) }
             get_score_right(): int       { @@:(this.score_right) }
             get_serve_direction(): int   { @@:(this.serving_to) }
@@ -67,7 +65,6 @@
             launch() { -> $InPlay }
             pause() { push$ -> $Paused }
 
-            get_state(): string          { @@:("serving") }
             get_score_left(): int        { @@:(this.score_left) }
             get_score_right(): int       { @@:(this.score_right) }
             get_serve_direction(): int   { @@:(this.serving_to) }
@@ -90,7 +87,6 @@
 
             pause() { push$ -> $Paused }
 
-            get_state(): string          { @@:("in_play") }
             get_score_left(): int        { @@:(this.score_left) }
             get_score_right(): int       { @@:(this.score_right) }
             get_serve_direction(): int   { @@:(this.serving_to) }
@@ -108,16 +104,15 @@
 
                 if (this.score_left >= this.winning_score) {
                     this.winner = "left"
-                    -> $GameOver
+                    -> "left wins" $GameOver
                 } else if (this.score_right >= this.winning_score) {
                     this.winner = "right"
-                    -> $GameOver
+                    -> "right wins" $GameOver
                 } else {
-                    -> $Serving
+                    -> "next point" $Serving
                 }
             }
 
-            get_state(): string          { @@:("point_scored") }
             get_score_left(): int        { @@:(this.score_left) }
             get_score_right(): int       { @@:(this.score_right) }
             get_serve_direction(): int   { @@:(this.serving_to) }
@@ -128,7 +123,6 @@
         $Paused {
             resume() { -> pop$ }
 
-            get_state(): string          { @@:("paused") }
             get_score_left(): int        { @@:(this.score_left) }
             get_score_right(): int       { @@:(this.score_right) }
             get_serve_direction(): int   { @@:(this.serving_to) }
@@ -139,7 +133,6 @@
         $GameOver {
             restart() { -> $AttractMode }
 
-            get_state(): string          { @@:("game_over") }
             get_score_left(): int        { @@:(this.score_left) }
             get_score_right(): int       { @@:(this.score_right) }
             get_serve_direction(): int   { @@:(this.serving_to) }
