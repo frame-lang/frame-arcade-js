@@ -28,6 +28,9 @@
         // snake_case string per state. Returns the Frame compartment
         // name verbatim (PascalCase, matches the .dot diagram labels).
         get_current_state_name(): string { @@:(@@:system.state.name) }
+        // Winning score is owned by the domain; expose it as a
+        // state-independent query so the renderer can show "first to N".
+        get_winning_score(): int { @@:(this.winning_score) }
 
     interface:
         start()

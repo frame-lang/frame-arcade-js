@@ -30,6 +30,7 @@
 
     operations:
         get_current_state_name(): string { @@:(@@:system.state.name) }
+        get_hyperspaces_remaining(): int { @@:(this.hyperspaces_remaining) }
 
     interface:
         tick(dt: float)
@@ -39,6 +40,7 @@
         fire()
         can_fire(): bool
         can_be_hit(): bool
+        can_hyperspace(): bool
         is_visible(): bool
         is_alive(): bool
         get_lives(): int
@@ -65,9 +67,17 @@
 
             hit() { -> $Exploding }
 
+            // Classic Asteroids: only 3 hyperspace jumps per game.
+            // The FSM owns the count so the scene can't accidentally
+            // burn one — guard with can_hyperspace() before firing.
             hyperspace() {
-                -> $InHyperspace
+                if (this.hyperspaces_remaining > 0) {
+                    this.hyperspaces_remaining = this.hyperspaces_remaining - 1
+                    -> $InHyperspace
+                }
             }
+
+            can_hyperspace(): bool { @@:(this.hyperspaces_remaining > 0) }
 
             can_fire(): bool    { @@:($.cooldown <= 0.0) }
             can_be_hit(): bool  { @@:(true) }
@@ -90,11 +100,12 @@
                 }
             }
 
-            can_fire(): bool    { @@:(false) }
-            can_be_hit(): bool  { @@:(false) }
-            is_visible(): bool  { @@:(false) }
-            is_alive(): bool    { @@:(true) }
-            get_lives(): int    { @@:(this.lives_remaining) }
+            can_fire(): bool       { @@:(false) }
+            can_be_hit(): bool     { @@:(false) }
+            can_hyperspace(): bool { @@:(false) }
+            is_visible(): bool     { @@:(false) }
+            is_alive(): bool       { @@:(true) }
+            get_lives(): int       { @@:(this.lives_remaining) }
         }
 
         $Exploding {
@@ -118,11 +129,12 @@
                 }
             }
 
-            can_fire(): bool    { @@:(false) }
-            can_be_hit(): bool  { @@:(false) }
-            is_visible(): bool  { @@:(true) }
-            is_alive(): bool    { @@:(false) }
-            get_lives(): int    { @@:(this.lives_remaining) }
+            can_fire(): bool       { @@:(false) }
+            can_be_hit(): bool     { @@:(false) }
+            can_hyperspace(): bool { @@:(false) }
+            is_visible(): bool     { @@:(true) }
+            is_alive(): bool       { @@:(false) }
+            get_lives(): int       { @@:(this.lives_remaining) }
         }
 
         $Respawning {
@@ -141,30 +153,35 @@
                 }
             }
 
-            can_fire(): bool    { @@:(true) }
-            can_be_hit(): bool  { @@:(false) }
-            is_visible(): bool  { @@:(true) }
-            is_alive(): bool    { @@:(true) }
-            get_lives(): int    { @@:(this.lives_remaining) }
+            can_fire(): bool       { @@:(true) }
+            can_be_hit(): bool     { @@:(false) }
+            can_hyperspace(): bool { @@:(false) }
+            is_visible(): bool     { @@:(true) }
+            is_alive(): bool       { @@:(true) }
+            get_lives(): int       { @@:(this.lives_remaining) }
         }
 
         $Dead {
             respawn() {
                 this.lives_remaining = this.starting_lives
+                this.hyperspaces_remaining = this.starting_hyperspaces
                 -> $Alive
             }
 
-            can_fire(): bool    { @@:(false) }
-            can_be_hit(): bool  { @@:(false) }
-            is_visible(): bool  { @@:(false) }
-            is_alive(): bool    { @@:(false) }
-            get_lives(): int    { @@:(0) }
+            can_fire(): bool       { @@:(false) }
+            can_be_hit(): bool     { @@:(false) }
+            can_hyperspace(): bool { @@:(false) }
+            is_visible(): bool     { @@:(false) }
+            is_alive(): bool       { @@:(false) }
+            get_lives(): int       { @@:(0) }
         }
 
     domain:
         host: any = host
         lives_remaining: int = 3
         starting_lives: int = 3
+        hyperspaces_remaining: int = 3
+        starting_hyperspaces: int = 3
 }
 
 @@system AsteroidField {
@@ -328,6 +345,11 @@
 
     operations:
         get_current_state_name(): string { @@:(@@:system.state.name) }
+        // Bullet pool cap (classic Asteroids: 4 on screen). Surfaced as
+        // operations so the renderer can compose its fire gate without
+        // each state having to re-declare the query.
+        get_bullets_in_flight(): int { @@:(this.bullets_in_flight) }
+        get_max_bullets(): int       { @@:(this.max_bullets) }
 
     interface:
         start()
@@ -338,6 +360,11 @@
         ship_hit_asteroid(index: int)
         bullet_hit_asteroid(index: int)
         ship_hyperspace()
+        // Renderer fires these when a bullet enters/leaves the world.
+        // bullet_expired() covers both off-screen lifetime AND collision
+        // (the renderer is closer to those events than the FSM is).
+        bullet_fired()
+        bullet_expired()
         get_score(): int
         get_lives(): int
         get_wave(): int
@@ -349,6 +376,7 @@
             $>() {
                 this.score = 0
                 this.wave = 1
+                this.bullets_in_flight = 0
             }
 
             start() {
@@ -367,6 +395,19 @@
         $InGame {
             pause() {
                 push$ -> $Paused
+            }
+
+            // Bullet pool bookkeeping. Children of $InGame ($Playing,
+            // $ShipDying, $WaveClear) all forward to $^ for unhandled
+            // events, so bullet_fired/bullet_expired bubble here.
+            bullet_fired() {
+                this.bullets_in_flight = this.bullets_in_flight + 1
+            }
+
+            bullet_expired() {
+                if (this.bullets_in_flight > 0) {
+                    this.bullets_in_flight = this.bullets_in_flight - 1
+                }
             }
 
             get_score(): int        { @@:(this.score) }
@@ -485,6 +526,8 @@
         wave: int = 1
         wave_timer: float = 0.0
         wave_pause: float = 2.0
+        bullets_in_flight: int = 0
+        max_bullets: int = 4
         last_court_size: Vector2 = { x: 640.0, y: 480.0 }
         ship = @@Ship(ship_host)
         field = @@AsteroidField()

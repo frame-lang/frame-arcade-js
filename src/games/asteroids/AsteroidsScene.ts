@@ -13,7 +13,9 @@ interface ShipSub {
   get_current_state_name(): string;
   is_visible(): boolean;
   can_fire(): boolean;
+  can_hyperspace(): boolean;
   fire(): void;
+  get_hyperspaces_remaining(): number;
 }
 interface FieldSub {
   count(): number;
@@ -30,11 +32,15 @@ export interface AsteroidsMachine {
   ship_hit_asteroid(index: number): void;
   bullet_hit_asteroid(index: number): void;
   ship_hyperspace(): void;
+  bullet_fired(): void;
+  bullet_expired(): void;
   get_current_state_name(): string;
   get_score(): number;
   get_lives(): number;
   get_wave(): number;
   get_difficulty(): number;
+  get_bullets_in_flight(): number;
+  get_max_bullets(): number;
   is_paused(): boolean;
   ship: ShipSub;
   field: FieldSub;
@@ -106,11 +112,14 @@ export class AsteroidsScene extends Phaser.Scene {
 
   private onSpace(): void {
     const s = this.m.get_current_state_name();
-    if (s === "Playing" && this.m.ship.can_fire()) {
-      // The FSM owns the cooldown — fire() resets Ship.$Alive's $.cooldown
-      // state-local; can_fire() above already reflects whether we're past
-      // it. After this, can_fire() returns false until tick() drains
-      // the cooldown back to zero.
+    // Fire gate composes two FSM facts: Ship.$Alive's cooldown
+    // (can_fire), and the orchestrator's bullet pool cap (4 on screen).
+    // Both live in the FSM — the scene just asks.
+    if (
+      s === "Playing" &&
+      this.m.ship.can_fire() &&
+      this.m.get_bullets_in_flight() < this.m.get_max_bullets()
+    ) {
       this.m.ship.fire();
       // Spawn at the nose tip. With the centroid-at-origin triangle the nose
       // vertex is at local (0, -14), so the muzzle is 14px forward along the
@@ -122,15 +131,19 @@ export class AsteroidsScene extends Phaser.Scene {
       (b as unknown as { vx: number }).vx = fx * BULLET + this.svx;
       (b as unknown as { vy: number }).vy = fy * BULLET + this.svy;
       this.shots.push(b);
+      this.m.bullet_fired();
     }
   }
 
   private onHyper(): void {
-    // Just ask the FSM. Ship.$Alive.hyperspace() transitions to
-    // $InHyperspace, whose $>() handler calls our warp_out() host method
-    // to randomise position + zero velocity. The scene doesn't need to
-    // know what "hyperspace" means visually — Frame already announced it.
-    if (this.m.get_current_state_name() === "Playing") {
+    // Ship owns the hyperspace cap — can_hyperspace() returns true only
+    // in $Alive AND while hyperspaces_remaining > 0. The orchestrator
+    // gate (state === Playing) still applies; the FSM gate handles the
+    // count. Either gate failing makes this a no-op.
+    if (
+      this.m.get_current_state_name() === "Playing" &&
+      this.m.ship.can_hyperspace()
+    ) {
       this.m.ship_hyperspace();
     }
   }
@@ -172,7 +185,13 @@ export class AsteroidsScene extends Phaser.Scene {
     this.ship.rotation = 0;
     this.svx = 0;
     this.svy = 0;
-    this.shots.forEach((b) => b.destroy());
+    // Bullets cleared on respawn — tell the FSM each one is gone so
+    // bullets_in_flight matches reality. Otherwise the pool stays
+    // pinned at the count from before the death.
+    this.shots.forEach((b) => {
+      b.destroy();
+      this.m.bullet_expired();
+    });
     this.shots = [];
   }
 
@@ -232,11 +251,12 @@ export class AsteroidsScene extends Phaser.Scene {
     );
     // Flame: only while actively thrusting in Playing.
     this.updateFlame(s === "Playing" && this.keys.UP.isDown);
-    // Same HUD layout as the Godot driver — SCORE / LIVES / WAVE / DIFF
-    // across the top, zero-padded score so the column doesn't jitter.
+    // Same HUD layout as the Godot driver — SCORE / LIVES / WAVE / DIFF /
+    // WARP across the top, zero-padded score so the column doesn't jitter.
+    // WARP shows the hyperspace count owned by Ship's FSM.
     const score = this.m.get_score().toString().padStart(5, "0");
     this.scoreText.setText(
-      `SCORE ${score}   LIVES ${this.m.get_lives()}   WAVE ${this.m.get_wave()}   DIFF ${this.m.get_difficulty()}`,
+      `SCORE ${score}   LIVES ${this.m.get_lives()}   WAVE ${this.m.get_wave()}   DIFF ${this.m.get_difficulty()}   WARP ${this.m.ship.get_hyperspaces_remaining()}`,
     );
     this.stateText.setText(`state: ${s}`);
     this.centerText.setText(this.centerMessage(s));
@@ -272,7 +292,11 @@ export class AsteroidsScene extends Phaser.Scene {
       b.x = Phaser.Math.Wrap(b.x + b.vx * dt, 0, W);
       b.y = Phaser.Math.Wrap(b.y + b.vy * dt, 0, H);
       b.life = (b.life ?? 0) + dt;
-      if (b.life > 1.1) { b.destroy(); this.shots.splice(i, 1); }
+      if (b.life > 1.1) {
+        b.destroy();
+        this.shots.splice(i, 1);
+        this.m.bullet_expired();
+      }
     }
   }
 
@@ -294,6 +318,7 @@ export class AsteroidsScene extends Phaser.Scene {
           this.m.bullet_hit_asteroid(i);
           b.destroy();
           this.shots.splice(bi, 1);
+          this.m.bullet_expired();
           break;
         }
       }

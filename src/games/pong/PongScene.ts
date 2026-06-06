@@ -18,6 +18,7 @@ export interface PongMachine {
   get_score_right(): number;
   get_serve_direction(): number;
   get_winner(): string;
+  get_winning_score(): number;
   is_playing(): boolean;
 }
 
@@ -183,7 +184,7 @@ export class PongScene extends Phaser.Scene {
 
   private hint(s: string): string {
     switch (s) {
-      case "AttractMode": return "SPACE to start";
+      case "AttractMode": return `SPACE to start  ·  first to ${this.m.get_winning_score()}`;
       case "Serving": return "SPACE to serve  ·  W/S move  ·  P pause";
       case "InPlay": return "W/S move  ·  P pause";
       case "Paused": return "P to resume";
