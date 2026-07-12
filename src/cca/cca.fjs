@@ -743,7 +743,7 @@ import { AspectBus } from "./aspects.machine.js"
 @@system Adventure {
 
     operations:
-        current_state(): string { @@:(@@:system.state) }
+        current_state(): string { @@:(@@:system.state.name) }
 
     interface:
         setup_default_aspects()
@@ -3158,67 +3158,67 @@ import { AspectBus } from "./aspects.machine.js"
         }
 
     domain:
-        bus = @@AspectBus()
-        lamp = @@Lamp()
-        player = @@Player()
-        darkness = @@DarknessGate()
-        backpack = @@BackpackLimit()
-        magic = @@MagicWordTeleport()
-        score_ledger = @@ScoreLedger()
-        bird = @@Bird()
-        snake = @@Snake()
-        bear = @@Bear()
-        troll = @@Troll()
+        bus: AspectBus = @@AspectBus()
+        lamp: Lamp = @@Lamp()
+        player: Player = @@Player()
+        darkness: DarknessGate = @@DarknessGate()
+        backpack: BackpackLimit = @@BackpackLimit()
+        magic: MagicWordTeleport = @@MagicWordTeleport()
+        score_ledger: ScoreLedger = @@ScoreLedger()
+        bird: Bird = @@Bird()
+        snake: Snake = @@Snake()
+        bear: Bear = @@Bear()
+        troll: Troll = @@Troll()
 
-        dwarf1 = @@Dwarf(1)
-        dwarf2 = @@Dwarf(2)
-        dwarf3 = @@Dwarf(3)
-        dwarf4 = @@Dwarf(4)
-        dwarf5 = @@Dwarf(5)
+        dwarf1: Dwarf = @@Dwarf(1)
+        dwarf2: Dwarf = @@Dwarf(2)
+        dwarf3: Dwarf = @@Dwarf(3)
+        dwarf4: Dwarf = @@Dwarf(4)
+        dwarf5: Dwarf = @@Dwarf(5)
 
-        endgame = @@Endgame()
+        endgame: Endgame = @@Endgame()
 
-        cave_hint   = @@Hint(4)
-        bird_hint   = @@Hint(5)
-        snake_hint  = @@Hint(8)
-        maze_hint   = @@Hint(75)
-        plover_hint = @@Hint(25)
-        witts_hint  = @@Hint(20)
+        cave_hint: Hint = @@Hint(4)
+        bird_hint: Hint = @@Hint(5)
+        snake_hint: Hint = @@Hint(8)
+        maze_hint: Hint = @@Hint(75)
+        plover_hint: Hint = @@Hint(25)
+        witts_hint: Hint = @@Hint(20)
 
-        dragon = @@Dragon()
+        dragon: Dragon = @@Dragon()
 
-        pirate = @@Pirate(99)
+        pirate: Pirate = @@Pirate(99)
 
-        chance = @@Chance(1)
+        chance: Chance = @@Chance(1)
 
-        eggs_chant = @@EggsIncantation()
+        eggs_chant: EggsIncantation = @@EggsIncantation()
 
-        crystal_bridge = @@CrystalBridge()
+        crystal_bridge: CrystalBridge = @@CrystalBridge()
 
-        grate = @@Grate()
+        grate: Grate = @@Grate()
 
-        rusty_door = @@RustyDoor()
+        rusty_door: RustyDoor = @@RustyDoor()
 
-        vending = @@VendingMachine()
+        vending: VendingMachine = @@VendingMachine()
 
-        bottle = @@Bottle()
-        plant  = @@Plant()
+        bottle: Bottle = @@Bottle()
+        plant: Plant = @@Plant()
 
-        gold      = @@Treasure(18, 14)
-        silver    = @@Treasure(28, 14)
-        diamonds  = @@Treasure(27, 14)
-        jewelry   = @@Treasure(29, 14)
-        pearl     = @@Treasure(0,  14)
-        vase      = @@Treasure(97, 14, true)
-        eggs      = @@Treasure(92, 14)
-        trident   = @@Treasure(95, 14)
-        emerald   = @@Treasure(100,14)
-        spices    = @@Treasure(127,14)
-        chest     = @@Treasure(0,  14)
-        pyramid   = @@Treasure(101,14)
-        rug       = @@Treasure(119,14)
-        coins     = @@Treasure(30, 14)
-        chain     = @@Treasure(130,14)
+        gold: Treasure = @@Treasure(18, 14)
+        silver: Treasure = @@Treasure(28, 14)
+        diamonds: Treasure = @@Treasure(27, 14)
+        jewelry: Treasure = @@Treasure(29, 14)
+        pearl: Treasure = @@Treasure(0,  14)
+        vase: Treasure = @@Treasure(97, 14, true)
+        eggs: Treasure = @@Treasure(92, 14)
+        trident: Treasure = @@Treasure(95, 14)
+        emerald: Treasure = @@Treasure(100,14)
+        spices: Treasure = @@Treasure(127,14)
+        chest: Treasure = @@Treasure(0,  14)
+        pyramid: Treasure = @@Treasure(101,14)
+        rug: Treasure = @@Treasure(119,14)
+        coins: Treasure = @@Treasure(30, 14)
+        chain: Treasure = @@Treasure(130,14)
 
         BIRD_ID: int = 100
         CHAIN_ID: int = 101
@@ -3275,19 +3275,19 @@ import { AspectBus } from "./aspects.machine.js"
         WITTS_END_ROOM: int = 108
         PLOVER_ROOM: int = 100
 
-        rod_item       = @@Item(11)
-        keys_item      = @@Item(3)
-        lamp_item      = @@Item(3)
-        bottle_item    = @@Item(3)
-        cage_item      = @@Item(10)
-        food_item      = @@Item(3)
-        pillow_item    = @@Item(96)
-        clam_item      = @@Item(103)
-        magazine_item  = @@Item(106)
-        axe_item       = @@Item(-1)
-        mark_rod_item  = @@Item(-1)
-        batteries_item = @@Item(-1)
-        oyster_item    = @@Item(-1)
+        rod_item: Item = @@Item(11)
+        keys_item: Item = @@Item(3)
+        lamp_item: Item = @@Item(3)
+        bottle_item: Item = @@Item(3)
+        cage_item: Item = @@Item(10)
+        food_item: Item = @@Item(3)
+        pillow_item: Item = @@Item(96)
+        clam_item: Item = @@Item(103)
+        magazine_item: Item = @@Item(106)
+        axe_item: Item = @@Item(-1)
+        mark_rod_item: Item = @@Item(-1)
+        batteries_item: Item = @@Item(-1)
+        oyster_item: Item = @@Item(-1)
 
         witts_end_bonus: int = 0
 

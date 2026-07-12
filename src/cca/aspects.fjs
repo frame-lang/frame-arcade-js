@@ -244,7 +244,7 @@
 @@system Conductor {
 
     operations:
-        current_state(): string { @@:(@@:system.state) }
+        current_state(): string { @@:(@@:system.state.name) }
 
     interface:
         setup_default_aspects()
@@ -321,8 +321,8 @@
         }
 
     domain:
-        bus = @@AspectBus()
-        loud = @@LoudAspect()
-        mute = @@MuteAspect()
-        log_aspect = @@LogAspect()
+        bus: AspectBus = @@AspectBus()
+        loud: LoudAspect = @@LoudAspect()
+        mute: MuteAspect = @@MuteAspect()
+        log_aspect: LogAspect = @@LogAspect()
 }

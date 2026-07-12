@@ -23,7 +23,7 @@
 @@system Bird {
 
     operations:
-        current_state(): string { @@:(@@:system.state) }
+        current_state(): string { @@:(@@:system.state.name) }
 
     interface:
         capture()
