@@ -313,9 +313,9 @@
         }
 
     domain:
-        guard1 = @@Guard()
-        guard2 = @@Guard()
-        guard3 = @@Guard()
+        guard1: Guard = @@Guard()
+        guard2: Guard = @@Guard()
+        guard3: Guard = @@Guard()
         elapsed: float = 0.0
         caught_by: int = -1
         PATROL_SPEED: float = 95.0
